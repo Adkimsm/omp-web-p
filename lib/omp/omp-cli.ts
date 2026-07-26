@@ -1,5 +1,6 @@
 import { execFile } from "child_process";
 import { existsSync } from "fs";
+import { homedir } from "os";
 import { delimiter, join } from "path";
 
 /**
@@ -24,6 +25,21 @@ export function resolveOmpBin(): string | null {
   }
   for (const dir of (process.env.PATH ?? "").split(delimiter)) {
     if (!dir) continue;
+    const candidate = join(dir, BIN_NAME);
+    if (existsSync(candidate)) {
+      cachedBin = candidate;
+      return cachedBin;
+    }
+  }
+  // GUI-launched processes often miss homebrew/bun dirs in PATH; probe the
+  // usual install locations before giving up.
+  const fallbackDirs = [
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    join(homedir(), ".bun", "bin"),
+    join(homedir(), ".local", "bin"),
+  ];
+  for (const dir of fallbackDirs) {
     const candidate = join(dir, BIN_NAME);
     if (existsSync(candidate)) {
       cachedBin = candidate;

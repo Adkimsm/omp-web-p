@@ -68,6 +68,17 @@ export function translate(key: string, vars?: Record<string, string | number>): 
   );
 }
 
+/** Plural-aware translate: resolves `<key>.one` for count===1, `<key>.other`
+ * otherwise (zh/ja dictionaries may map both to the same string). The count is
+ * always available to the template as {count}. */
+export function translatePlural(
+  key: string,
+  count: number,
+  vars?: Record<string, string | number>,
+): string {
+  return translate(`${key}.${count === 1 ? "one" : "other"}`, { count, ...vars });
+}
+
 function subscribe(cb: () => void): () => void {
   listeners.add(cb);
   return () => {
@@ -91,5 +102,11 @@ export function useI18n() {
     [locale],
   );
 
-  return { locale, setLocale, t };
+  const tn = useCallback(
+    (key: string, count: number, vars?: Record<string, string | number>) =>
+      translatePlural(key, count, vars),
+    [locale],
+  );
+
+  return { locale, setLocale, t, tn };
 }
