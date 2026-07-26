@@ -122,6 +122,66 @@ function buildScanRoots(cwd: string): SkillScanRoot[] {
   return roots;
 }
 
+/** Directories the discovery walk reads, for callers that must authorize a
+ * skill path (single source of truth with buildScanRoots — a narrower list
+ * would reject skills the app itself discovered and installed). Without a cwd
+ * only the cwd-independent user-scope roots are returned. */
+export function getSkillScanRootDirs(cwd?: string): string[] {
+  return buildScanRoots(cwd ?? homedir()).map((root) => root.dir);
+}
+
+const DISABLE_INVOCATION_KEYS = ["disable-model-invocation", "disableModelInvocation", "hide"] as const;
+/** Agent Skills standard spelling — used when no variant is present yet. */
+const CANONICAL_DISABLE_KEY = DISABLE_INVOCATION_KEYS[0];
+
+/** True when any of the three spellings omp honors is set
+ * (frontmatter.hide === true || frontmatter.disableModelInvocation === true,
+ * with `disable-model-invocation` normalized into the latter). */
+export function readDisableModelInvocation(frontmatter: Record<string, unknown>): boolean {
+  return DISABLE_INVOCATION_KEYS.some((key) => isTruthyFlag(frontmatter[key]));
+}
+
+const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---(\r?\n|$)/;
+const DISABLE_KEY_LINE_RE = new RegExp(`^(?:${DISABLE_INVOCATION_KEYS.join("|")})[ \\t]*:.*$`);
+
+/** Set/clear the disable-model-invocation flag in a SKILL.md, editing the key
+ * line already present (in whichever of the three spellings) instead of
+ * prepending a second copy, which would make the frontmatter invalid YAML. */
+export function setDisableModelInvocation(content: string, disable: boolean): string {
+  const match = FRONTMATTER_RE.exec(content);
+  if (!match) {
+    return disable ? `---\n${CANONICAL_DISABLE_KEY}: true\n---\n${content}` : content;
+  }
+
+  const eol = match[0].includes("\r\n") ? "\r\n" : "\n";
+  const lines = match[1].split(/\r?\n/);
+  const hits = lines.reduce<number[]>((acc, line, index) => {
+    if (DISABLE_KEY_LINE_RE.test(line)) acc.push(index);
+    return acc;
+  }, []);
+
+  let next: string[];
+  if (disable) {
+    if (hits.length === 0) {
+      next = [`${CANONICAL_DISABLE_KEY}: true`, ...lines];
+    } else {
+      // Keep the spelling the file already uses; drop any duplicate variants so
+      // a stale `hide: true` cannot re-enable hiding on the next toggle.
+      const keep = hits[0];
+      const keyName = /^([\w-]+)/.exec(lines[keep])?.[1] ?? CANONICAL_DISABLE_KEY;
+      next = lines
+        .map((line, index) => (index === keep ? `${keyName}: true` : line))
+        .filter((_, index) => index === keep || !hits.includes(index));
+    }
+  } else {
+    if (hits.length === 0) return content;
+    next = lines.filter((_, index) => !hits.includes(index));
+  }
+
+  const block = `---${eol}${next.join(eol)}${eol}---${match[2]}`;
+  return block + content.slice(match[0].length);
+}
+
 async function scanRoot(root: SkillScanRoot, diagnostics: SkillDiagnostic[]): Promise<SkillInfo[]> {
   let entries;
   try {
@@ -162,10 +222,7 @@ async function scanRoot(root: SkillScanRoot, diagnostics: SkillDiagnostic[]): Pr
       description,
       filePath: skillPath,
       baseDir: path.join(root.dir, entry.name),
-      disableModelInvocation:
-        isTruthyFlag(frontmatter["disable-model-invocation"]) ||
-        isTruthyFlag(frontmatter.disableModelInvocation) ||
-        isTruthyFlag(frontmatter.hide),
+      disableModelInvocation: readDisableModelInvocation(frontmatter),
       sourceInfo: { source: root.source, scope: root.scope },
     });
   }));

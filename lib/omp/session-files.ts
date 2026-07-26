@@ -16,6 +16,7 @@ import {
   writeSync,
 } from "fs";
 import * as path from "path";
+import { StringDecoder } from "string_decoder";
 import type {
   CompactionEntry,
   SessionEntry,
@@ -358,10 +359,14 @@ export function resolveBlobRefsInEntries(entries: SessionEntry[], options: Resol
 // Session file loading
 // ============================================================================
 
+export type SessionLoadError = "too_large";
+
 export interface LoadedSession {
   header: SessionHeader | null;
   entries: SessionEntry[];
   titleSlot: SessionTitleSlot | undefined;
+  /** Set when the file exists but could not be materialized (see loadSessionFile). */
+  error?: SessionLoadError;
 }
 
 export interface LoadSessionOptions extends ResolveBlobOptions {
@@ -369,28 +374,93 @@ export interface LoadSessionOptions extends ResolveBlobOptions {
   resolveBlobs?: boolean;
 }
 
+const SESSION_READ_CHUNK_BYTES = 1024 * 1024;
+
+/**
+ * Ceiling on the on-disk size omp-web will materialize into memory. omp streams
+ * sessions, so this is not an omp limit — it is the point past which parsing a
+ * session into JS objects (and serializing it into one HTTP response) would OOM
+ * the whole Next.js server. Refusing loudly beats taking the process down.
+ */
+export const MAX_SESSION_LOAD_BYTES = 1024 * 1024 * 1024;
+
+/**
+ * Read a file line by line over a byte buffer. Unlike readFileSync(path,"utf8")
+ * this never materializes the whole file as a single JS string, so sessions
+ * past Node's ~512 MiB string cap still open. Lines exclude the newline; the
+ * decoder carries multi-byte characters across chunk boundaries.
+ */
+function forEachFileLineSync(filePath: string, onLine: (line: string) => void): void {
+  const fd = openSync(filePath, "r");
+  try {
+    const buffer = Buffer.allocUnsafe(SESSION_READ_CHUNK_BYTES);
+    const decoder = new StringDecoder("utf8");
+    let pending = "";
+    for (;;) {
+      const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      pending += decoder.write(buffer.subarray(0, bytesRead));
+      // Index-walk the buffered text and slice once per chunk — slicing per
+      // line would copy the whole pending window for every line.
+      let start = 0;
+      let newlineIndex = pending.indexOf("\n", start);
+      while (newlineIndex !== -1) {
+        onLine(pending.slice(start, newlineIndex));
+        start = newlineIndex + 1;
+        newlineIndex = pending.indexOf("\n", start);
+      }
+      if (start > 0) pending = pending.slice(start);
+    }
+    pending += decoder.end();
+    if (pending) onLine(pending);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 /**
  * Load and parse a session file: strip the optional title slot, validate the
  * header, migrate legacy pi v1/v2 shapes, fold the slot title into the header,
  * and optionally resolve blob refs. Missing/malformed files yield
- * { header: null, entries: [] } instead of throwing.
+ * { header: null, entries: [] } instead of throwing; a session too large to
+ * hold in memory additionally sets error:"too_large" so routes can say so
+ * instead of reporting it as malformed.
  */
 export function loadSessionFile(filePath: string, options: LoadSessionOptions = {}): LoadedSession {
-  let content: string;
+  let size: number;
   try {
-    content = readFileSync(filePath, "utf8");
+    size = statSync(filePath).size;
   } catch {
     return { header: null, entries: [], titleSlot: undefined };
   }
-
-  let titleSlot: SessionTitleSlot | undefined;
-  const newlineIndex = content.indexOf("\n");
-  if (newlineIndex >= 0) {
-    titleSlot = parseTitleSlotLine(content.slice(0, newlineIndex));
-    if (titleSlot) content = content.slice(newlineIndex + 1);
+  if (size > MAX_SESSION_LOAD_BYTES) {
+    return { header: null, entries: [], titleSlot: undefined, error: "too_large" };
   }
 
-  const records = parseJsonlLenient<Record<string, unknown>>(content);
+  let titleSlot: SessionTitleSlot | undefined;
+  const records: Record<string, unknown>[] = [];
+  let isFirstLine = true;
+  try {
+    forEachFileLineSync(filePath, (rawLine) => {
+      if (isFirstLine) {
+        isFirstLine = false;
+        titleSlot = parseTitleSlotLine(rawLine);
+        if (titleSlot) return;
+      }
+      const line = rawLine.trim();
+      if (!line) return;
+      try {
+        records.push(JSON.parse(line) as Record<string, unknown>);
+      } catch {
+        // Skip malformed line (torn write).
+      }
+    });
+  } catch (error) {
+    // A single line past the string cap, or an allocation failure part-way in.
+    const tooLarge = error instanceof RangeError;
+    return { header: null, entries: [], titleSlot, ...(tooLarge ? { error: "too_large" as const } : {}) };
+  }
+
   const headerRecord = records[0];
   if (!headerRecord || headerRecord.type !== "session" || typeof headerRecord.id !== "string") {
     return { header: null, entries: [], titleSlot };
@@ -935,8 +1005,19 @@ export function setSessionTitle(filePath: string, title: string, source: Session
   lines[headerIndex] = JSON.stringify(header);
   const body = serializeTitleSlot(update) + lines.join("\n");
 
+  writeSessionFileAtomicSync(filePath, body, "title");
+  return true;
+}
+
+/**
+ * Replace a session file's contents through a temp file in the same directory
+ * plus renameSync. writeFileSync truncates before writing, so a crash or ENOSPC
+ * mid-write would permanently destroy the session; rename is atomic, leaving
+ * either the old or the new file. Mirrors omp's own atomic session rewrite.
+ */
+export function writeSessionFileAtomicSync(filePath: string, body: string, tag = "rewrite"): void {
   const dir = path.dirname(filePath);
-  const tempDir = mkdtempSync(path.join(dir, ".omp-web-title-"));
+  const tempDir = mkdtempSync(path.join(dir, `.omp-web-${tag}-`));
   const tempPath = path.join(tempDir, path.basename(filePath));
   try {
     writeFileSync(tempPath, body, "utf8");
@@ -948,7 +1029,6 @@ export function setSessionTitle(filePath: string, title: string, source: Session
       rmSync(tempDir, { recursive: true, force: true });
     }
   }
-  return true;
 }
 
 /**

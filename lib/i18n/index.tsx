@@ -21,8 +21,20 @@ const dictionaries: Record<Locale, Record<string, string>> = {
   ja: ja as Record<string, string>,
 };
 
-const listeners = new Set<() => void>();
-let currentLocale: Locale | null = null;
+// Held on globalThis so a Fast Refresh module swap cannot split subscribers
+// across two Sets — components mounted before the swap would otherwise never
+// be notified of a language change.
+interface I18nState {
+  listeners: Set<() => void>;
+  locale: Locale | null;
+}
+
+declare global {
+  var __ompI18nState: I18nState | undefined;
+}
+
+const state: I18nState = (globalThis.__ompI18nState ??= { listeners: new Set(), locale: null });
+const listeners = state.listeners;
 
 function detectLocale(): Locale {
   try {
@@ -41,12 +53,12 @@ function detectLocale(): Locale {
 
 function getLocale(): Locale {
   if (typeof document === "undefined") return "en";
-  if (currentLocale === null) currentLocale = detectLocale();
-  return currentLocale;
+  if (state.locale === null) state.locale = detectLocale();
+  return state.locale;
 }
 
 export function setLocale(locale: Locale): void {
-  currentLocale = locale;
+  state.locale = locale;
   try {
     localStorage.setItem(STORAGE_KEY, locale);
   } catch {

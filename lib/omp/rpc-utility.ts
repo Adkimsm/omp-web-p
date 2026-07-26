@@ -13,7 +13,11 @@ import { RpcProcess } from "./rpc-process";
  * with --no-session and its agent state is throwaway.
  */
 
-const UTILITY_EXTRA_ARGS = ["--no-session", "--no-extensions", "--no-skills", "--no-lsp"];
+// Extensions stay ENABLED: they can register models and login providers, and
+// omitting them made the web UI's model/provider lists disagree with the CLI's.
+// Measured against a real install (omp/17.1.3): ready-frame latency is the same
+// either way (~3.6s with vs ~4.0s without over 4 runs each).
+const UTILITY_EXTRA_ARGS = ["--no-session", "--no-skills", "--no-lsp"];
 const READY_TIMEOUT_MS = 60_000;
 const IDLE_KILL_MS = 60_000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 60_000;

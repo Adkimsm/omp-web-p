@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { readFileSync, readdirSync, statSync, writeFileSync } from "fs";
+import { readFileSync, readdirSync, statSync } from "fs";
 import { dirname, join } from "path";
 import {
   buildSessionTree,
@@ -8,9 +8,11 @@ import {
   loadSessionFile,
   parseTitleSlotLine,
   setSessionTitle,
+  writeSessionFileAtomicSync,
 } from "@/lib/omp/session-files";
 import {
   resolveSessionPath,
+  resolveParentSessionId,
   resolveSessionIdByPath,
   invalidateSessionPathCache,
   invalidateSessionListCache,
@@ -135,10 +137,16 @@ export async function GET(
     const deferThinking = searchParams.has("deferThinking");
     const deferToolResultImages = searchParams.has("deferMedia");
 
-    const { header, entries } = loadSessionFile(filePath, {
+    const { header, entries, error: loadError } = loadSessionFile(filePath, {
       resolveBlobs: true,
       skipToolResultImages: deferToolResultImages,
     });
+    if (loadError === "too_large") {
+      return NextResponse.json(
+        { error: "Session file is too large to open in omp-web", code: "session_file_too_large" },
+        { status: 413 },
+      );
+    }
     if (!header) {
       return NextResponse.json({ error: "Session file is missing or malformed", code: "session_file_malformed" }, { status: 404 });
     }
@@ -149,7 +157,7 @@ export async function GET(
     let modified = header.timestamp ?? new Date().toISOString();
     try { modified = statSync(filePath).mtime.toISOString(); } catch { /* use header timestamp */ }
     const parentSessionId = header.parentSession
-      ? await resolveSessionIdByPath(header.parentSession)
+      ? await resolveParentSessionId(header.parentSession)
       : undefined;
     const info = {
       path: filePath,
@@ -193,13 +201,10 @@ export async function PATCH(
     if (typeof name !== "string" || !name.trim()) {
       return NextResponse.json({ error: "name is required", code: "session_name_required" }, { status: 400 });
     }
-    const filePath = await resolveSessionPath(id);
-    if (!filePath) {
-      return NextResponse.json({ error: "Session not found", code: "session_not_found" }, { status: 404 });
-    }
-
     // A running omp process owns its session file; route the rename through it
-    // so the in-memory title cannot clobber ours on the next flush.
+    // so the in-memory title cannot clobber ours on the next flush. This runs
+    // before the path check because omp does not create the session file until
+    // the history holds an assistant message.
     let renamed = false;
     const rpc = getRpcSession(id);
     if (rpc?.isAlive?.() && typeof rpc.send === "function") {
@@ -211,6 +216,10 @@ export async function PATCH(
       }
     }
     if (!renamed) {
+      const filePath = await resolveSessionPath(id);
+      if (!filePath) {
+        return NextResponse.json({ error: "Session not found", code: "session_not_found" }, { status: 404 });
+      }
       setSessionTitle(filePath, name.trim(), "user");
     }
     invalidateSessionListCache();
@@ -233,36 +242,81 @@ export async function DELETE(
     }
 
     // Read only the bounded header before deleting.
-    const parentSessionPath = readSessionHeader(filePath)?.parentSession;
+    const deletedHeader = readSessionHeader(filePath);
+    const deletedSessionId = deletedHeader?.id ?? id;
+    const parentSession = deletedHeader?.parentSession;
+
+    // Children reference their parent either by file path or by bare session id
+    // (see resolveParentSessionId), so the grandparent has to be written back in
+    // whichever form each child used. Resolve both forms up front.
+    let grandparentPath: string | undefined;
+    let grandparentId: string | undefined;
+    if (parentSession) {
+      const idForPath = await resolveSessionIdByPath(parentSession);
+      if (idForPath) {
+        grandparentPath = parentSession;
+        grandparentId = idForPath;
+      } else {
+        const pathForId = await resolveSessionPath(parentSession);
+        if (pathForId) {
+          grandparentPath = pathForId;
+          grandparentId = parentSession;
+        }
+      }
+    }
 
     // Re-attach all direct children to this session's parent (cascade re-parent)
     // Scan sibling files in the same directory
     const targetPathKey = sessionPathKey(filePath);
     const dir = dirname(filePath);
+    const skippedChildren: Array<{ id: string; reason: string }> = [];
     try {
       const files = readdirSync(dir).filter(
         (file) => file.endsWith(".jsonl") && sessionPathKey(join(dir, file)) !== targetPathKey,
       );
       for (const file of files) {
         const childPath = join(dir, file);
+
+        // Parse phase: an unreadable or non-matching sibling is simply not a
+        // child of the deleted session, so it must not be reported as skipped.
+        let lines: string[];
+        let headerIndex: number;
+        let header: { type?: string; id?: string; parentSession?: string };
+        let linkedByPath: boolean;
         try {
-          const content = readFileSync(childPath, "utf8");
-          const lines = content.split("\n");
+          lines = readFileSync(childPath, "utf8").split("\n");
           // v3 files carry a fixed-width title slot on line 1; the session
           // header is then line 2. The slot line is left byte-identical.
-          const headerIndex = parseTitleSlotLine(lines[0] ?? "") ? 1 : 0;
-          const header = JSON.parse(lines[headerIndex]) as { type?: string; parentSession?: string };
-          if (
-            header.type === "session" &&
-            header.parentSession &&
-            sessionPathKey(header.parentSession) === targetPathKey
-          ) {
-            // Rewrite header with new parentSession
-            header.parentSession = parentSessionPath;
-            lines[headerIndex] = JSON.stringify(header);
-            writeFileSync(childPath, lines.join("\n"));
-          }
-        } catch { /* skip malformed */ }
+          headerIndex = parseTitleSlotLine(lines[0] ?? "") ? 1 : 0;
+          header = JSON.parse(lines[headerIndex]) as typeof header;
+          if (header.type !== "session" || !header.parentSession) continue;
+          linkedByPath = sessionPathKey(header.parentSession) === targetPathKey;
+          if (!linkedByPath && header.parentSession !== deletedSessionId) continue;
+        } catch {
+          continue;
+        }
+
+        // A live omp process owns its session file and flushes its whole
+        // in-memory state on write — our rewrite would be clobbered by (or
+        // interleaved with) its next flush.
+        const childId = typeof header.id === "string" ? header.id : undefined;
+        if (childId && getRpcSession(childId)?.isAlive?.()) {
+          skippedChildren.push({ id: childId, reason: "session_child_live" });
+          continue;
+        }
+
+        // Write the replacement in the same form the child used.
+        header.parentSession = linkedByPath
+          ? (grandparentPath ?? parentSession)
+          : (grandparentId ?? parentSession);
+        lines[headerIndex] = JSON.stringify(header);
+        try {
+          // Atomic: writeFileSync truncates first, so a crash or ENOSPC here
+          // would permanently truncate a session the user did NOT delete.
+          writeSessionFileAtomicSync(childPath, lines.join("\n"), "reparent");
+        } catch {
+          skippedChildren.push({ id: childId ?? file, reason: "session_child_rewrite_failed" });
+        }
       }
     } catch { /* skip if dir unreadable */ }
 
@@ -272,7 +326,10 @@ export async function DELETE(
     deleteSessionFileWithArtifacts(filePath);
     invalidateSessionPathCache(id);
     invalidateSessionListCache();
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({
+      ok: true,
+      ...(skippedChildren.length > 0 ? { skippedChildren } : {}),
+    });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }

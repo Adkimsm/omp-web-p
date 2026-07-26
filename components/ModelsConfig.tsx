@@ -1237,6 +1237,10 @@ export function ModelsConfig({ onClose }: { onClose: () => void }) {
   const [oauthProviders, setOauthProviders] = useState<OAuthProvider[]>([]);
   const [apiKeyProviders, setApiKeyProviders] = useState<ApiKeyProvider[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
+  // Set when models.yml is on disk but unparseable: the editor shows the error
+  // instead of an empty form, and saving stays blocked so the hand-written file
+  // is never overwritten with nothing.
+  const [parseError, setParseError] = useState<{ message: string; path?: string } | null>(null);
 
   const loadOAuthProviders = useCallback(() => {
     fetch("/api/auth/providers")
@@ -1252,10 +1256,18 @@ export function ModelsConfig({ onClose }: { onClose: () => void }) {
       .catch(() => {});
   }, []);
 
-  useEffect(() => {
+  const loadConfig = useCallback(() => {
+    setLoading(true);
     fetch("/api/models-config")
       .then((r) => r.json())
-      .then((d: ModelsFileData) => {
+      .then((d: ModelsFileData & { parseError?: string; code?: string; path?: string }) => {
+        if (d.parseError) {
+          setParseError({ message: d.parseError, path: d.path });
+          setConfig({ providers: {} });
+          setSelection(null);
+          return;
+        }
+        setParseError(null);
         const normalized = d.providers ? d : { ...d, providers: {} };
         setConfig(normalized);
         const keys = Object.keys(normalized.providers ?? {});
@@ -1263,9 +1275,13 @@ export function ModelsConfig({ onClose }: { onClose: () => void }) {
       })
       .catch(() => setConfig({ providers: {} }))
       .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    loadConfig();
     loadOAuthProviders();
     loadApiKeyProviders();
-  }, [loadOAuthProviders, loadApiKeyProviders]);
+  }, [loadConfig, loadOAuthProviders, loadApiKeyProviders]);
 
   const addCustomProvider = useCallback(() => {
     let finalName = "new-provider";
@@ -1341,6 +1357,7 @@ export function ModelsConfig({ onClose }: { onClose: () => void }) {
   }, []);
 
   const handleSave = useCallback(async () => {
+    if (parseError) return;
     setSaving(true);
     setSaveError(null);
     setSavedOk(false);
@@ -1351,14 +1368,18 @@ export function ModelsConfig({ onClose }: { onClose: () => void }) {
         body: JSON.stringify(config),
       });
       const d = await res.json() as { success?: boolean; error?: string; code?: string };
-      if (!res.ok || d.error) setSaveError(d.error || d.code ? formatApiError(d) : `HTTP ${res.status}`);
-      else { setSavedOk(true); setTimeout(() => setSavedOk(false), 2000); }
+      if (!res.ok || d.error) {
+        setSaveError(d.error || d.code ? formatApiError(d) : `HTTP ${res.status}`);
+        // The file became unparseable after it was loaded — the server refused
+        // the write, so switch the editor into the same blocked state.
+        if (d.code === "models_config_unparseable") setParseError({ message: d.error ?? formatApiError(d) });
+      } else { setSavedOk(true); setTimeout(() => setSavedOk(false), 2000); }
     } catch (e) {
       setSaveError(String(e));
     } finally {
       setSaving(false);
     }
-  }, [config]);
+  }, [config, parseError]);
 
   const providers = Object.entries(config.providers ?? {});
   const activeOAuth = oauthProviders.filter((p) => p.loggedIn);
@@ -1422,6 +1443,24 @@ export function ModelsConfig({ onClose }: { onClose: () => void }) {
         </div>
 
         {/* Body */}
+        {parseError ? (
+          <div style={{ flex: 1, overflowY: "auto", padding: 24, display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#f87171" }}>{t("modelsConfig.parseErrorTitle")}</div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.6 }}>{t("modelsConfig.parseErrorBody")}</div>
+            {parseError.path && (
+              <code style={{ fontSize: 11, color: "var(--text-dim)", fontFamily: "var(--font-mono)", wordBreak: "break-all" }}>{parseError.path}</code>
+            )}
+            <pre style={{
+              margin: 0, padding: "10px 12px", background: "var(--bg-panel)", border: "1px solid var(--border)",
+              borderRadius: 6, color: "var(--text-muted)", fontSize: 11, fontFamily: "var(--font-mono)",
+              whiteSpace: "pre-wrap", wordBreak: "break-word", overflowX: "auto",
+            }}>{parseError.message}</pre>
+            <button onClick={loadConfig} disabled={loading}
+              style={{ alignSelf: "flex-start", padding: "5px 12px", background: "none", border: "1px solid var(--border)", borderRadius: 5, color: "var(--text-muted)", cursor: loading ? "default" : "pointer", fontSize: 12 }}>
+              {loading ? t("modelsConfig.loading") : t("modelsConfig.reload")}
+            </button>
+          </div>
+        ) : (
         <div style={{ flex: 1, display: "flex", flexDirection: isMobile ? "column" : "row", overflow: "hidden" }}>
 
           {/* Left: tree */}
@@ -1558,6 +1597,7 @@ export function ModelsConfig({ onClose }: { onClose: () => void }) {
             )}
           </div>
         </div>
+        )}
 
         {/* Footer */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 10, padding: "10px 18px", borderTop: "1px solid var(--border)", flexShrink: 0 }}>
@@ -1565,14 +1605,14 @@ export function ModelsConfig({ onClose }: { onClose: () => void }) {
           <button onClick={onClose} style={{ padding: "6px 14px", background: "none", border: "1px solid var(--border)", borderRadius: 6, color: "var(--text-muted)", cursor: "pointer", fontSize: 13 }}>
             {t("modelsConfig.cancel")}
           </button>
-          <button onClick={handleSave} disabled={saving || savedOk} style={{
+          <button onClick={handleSave} disabled={saving || savedOk || parseError !== null} style={{
             position: "relative",
             padding: "6px 16px",
             minWidth: 92,
-            background: savedOk ? "#16a34a" : saving ? "var(--bg-panel)" : "var(--accent)",
+            background: savedOk ? "#16a34a" : (saving || parseError) ? "var(--bg-panel)" : "var(--accent)",
             border: "none", borderRadius: 6,
-            color: savedOk ? "#fff" : saving ? "var(--text-muted)" : "#fff",
-            cursor: (saving || savedOk) ? "default" : "pointer", fontSize: 13, fontWeight: 600,
+            color: savedOk ? "#fff" : (saving || parseError) ? "var(--text-muted)" : "#fff",
+            cursor: (saving || savedOk || parseError) ? "default" : "pointer", fontSize: 13, fontWeight: 600,
             display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6,
             transition: "background-color 0.2s ease, color 0.2s ease",
             animation: savedOk ? "saved-pop 0.45s ease" : undefined,

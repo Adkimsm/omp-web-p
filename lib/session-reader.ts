@@ -1,3 +1,4 @@
+import { existsSync } from "fs";
 import { normalize as normalizePath } from "path";
 import { getAgentDir } from "./omp/paths";
 import {
@@ -21,10 +22,31 @@ import { resolveProject, type ProjectInfo } from "./worktree";
 
 export { getAgentDir };
 
+/**
+ * `header.parentSession` has two forms in omp: a session FILE PATH (branch /
+ * createBranchedSession, the RPC path omp-web drives) and a bare SESSION ID
+ * (SessionManager.fork, reached from the TUI /fork, `omp --fork` and /tan).
+ * Resolve the path form first, then fall back to an id match, so TUI-forked
+ * sessions are not rendered as unrelated roots.
+ */
+function matchParentSessionId(
+  parentSession: string,
+  pathToId: Map<string, string>,
+  knownIds: Set<string>,
+): string | undefined {
+  const byPath = pathToId.get(sessionPathKey(parentSession));
+  if (byPath) return byPath;
+  return knownIds.has(parentSession) ? parentSession : undefined;
+}
+
 async function loadAllSessions(): Promise<SessionInfo[]> {
   const ompSessions: OmpSessionInfo[] = await listAllSessionInfos();
   const pathToId = new Map<string, string>();
-  for (const s of ompSessions) pathToId.set(sessionPathKey(s.path), s.id);
+  const knownIds = new Set<string>();
+  for (const s of ompSessions) {
+    pathToId.set(sessionPathKey(s.path), s.id);
+    knownIds.add(s.id);
+  }
 
   // Resolve each unique cwd to its project root (main repo shared by all
   // worktrees). resolveProject caches per-cwd, so this is cheap after warmup.
@@ -49,7 +71,9 @@ async function loadAllSessions(): Promise<SessionInfo[]> {
       modified: s.modified.toISOString(),
       messageCount: s.messageCount,
       firstMessage: s.firstMessage || "(no messages)",
-      parentSessionId: s.parentSessionPath ? pathToId.get(sessionPathKey(s.parentSessionPath)) : undefined,
+      parentSessionId: s.parentSessionPath
+        ? matchParentSessionId(s.parentSessionPath, pathToId, knownIds)
+        : undefined,
       projectRoot: project?.projectRoot ?? s.cwd,
       ...(project?.isWorktree && project.branch ? { worktreeBranch: project.branch } : {}),
     };
@@ -122,11 +146,24 @@ function getPathToIdCache(): Map<string, string> {
 
 export async function resolveSessionPath(sessionId: string): Promise<string | null> {
   const cached = getPathCache().get(sessionId);
-  if (cached) return cached;
+  if (cached) {
+    if (existsSync(cached)) return cached;
+    // A deleted session must never resolve: callers spawn omp with --resume
+    // against the path, and omp silently creates a NEW session when the file
+    // is gone. Drop the stale entry (and the list snapshot that produced it).
+    invalidateSessionPathCache(sessionId);
+    invalidateSessionListCache();
+  }
 
   // Cache miss: scan all sessions to populate cache, then retry
   await listAllSessions();
-  return getPathCache().get(sessionId) ?? null;
+  const resolved = getPathCache().get(sessionId);
+  if (!resolved) return null;
+  if (!existsSync(resolved)) {
+    invalidateSessionPathCache(sessionId);
+    return null;
+  }
+  return resolved;
 }
 
 export async function resolveSessionIdByPath(filePath: string): Promise<string | undefined> {
@@ -136,6 +173,18 @@ export async function resolveSessionIdByPath(filePath: string): Promise<string |
 
   await listAllSessions();
   return getPathToIdCache().get(pathKey);
+}
+
+/**
+ * Resolve a `header.parentSession` value (either a session file path or a bare
+ * session id — see matchParentSessionId) to the parent's session id.
+ */
+export async function resolveParentSessionId(parentSession: string): Promise<string | undefined> {
+  if (!parentSession) return undefined;
+  const byPath = await resolveSessionIdByPath(parentSession);
+  if (byPath) return byPath;
+  // Id form: only accept it when a session file with that id still exists.
+  return (await resolveSessionPath(parentSession)) ? parentSession : undefined;
 }
 
 export function cacheSessionPath(sessionId: string, filePath: string): void {

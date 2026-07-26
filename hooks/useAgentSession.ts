@@ -173,7 +173,13 @@ const PROMPT_SETTLE_POLL_MS = 600;
 const PROMPT_SETTLE_MAX_MS = 20_000;
 const AGENT_STATE_RECONCILE_MS = 15_000;
 const BASH_STATE_RECONCILE_MS = 1_000;
-const EVENT_STREAM_CONNECT_TIMEOUT_MS = 5_000;
+// A cold `omp --mode rpc-ui` spawn (extension + skill + LSP discovery) can take
+// far longer than a few seconds, and the SSE route may only answer once the
+// child is ready. Give up only after the child would have timed out anyway
+// (rpc-process waitReady is 120s server-side) rather than dropping the prompt.
+const EVENT_STREAM_CONNECT_TIMEOUT_MS = 60_000;
+// Tell the user something is happening if the stream is still connecting.
+const EVENT_STREAM_SLOW_CONNECT_MS = 4_000;
 const MAX_NOTICES = 5;
 const NOTICE_VISIBLE_MS = 5000;
 const NOTICE_EXIT_ANIMATION_MS = 180;
@@ -638,6 +644,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       };
       const timeout = setTimeout(() => settle("timeout"), EVENT_STREAM_CONNECT_TIMEOUT_MS);
 
+      // The stream is live as soon as the response headers land, whether or not
+      // the server also sends an explicit `connected` frame.
+      es.onopen = () => settle("connected");
+
       es.onmessage = (e) => {
         try {
           const event = JSON.parse(e.data) as AgentEvent;
@@ -666,14 +676,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       };
     });
   }, []);
-
-  const ensureEventsConnected = useCallback(async (sid: string) => {
-    const result = await connectEvents(sid);
-    if (result.status === "connected" || result.source.readyState === EventSource.OPEN) return;
-    if (eventSourceRef.current === result.source) eventSourceRef.current = null;
-    result.source.close();
-    throw new EventStreamConnectionError(result.status);
-  }, [connectEvents]);
 
   const respondToExtensionUi = useCallback(async (
     request: ExtensionUiDialogRequest,
@@ -719,6 +721,26 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       },
     });
   }, []);
+
+  // Declared after addNotice: the dependency array below is evaluated during
+  // render, so addNotice must already be initialized.
+  const ensureEventsConnected = useCallback(async (sid: string) => {
+    // Only this (send-blocking) path announces a slow connect; the mount and
+    // auto-reconnect paths call connectEvents directly and stay silent.
+    const slowNotice = setTimeout(() => {
+      addNotice({ type: "info", message: translate("agentSession.startingAgent") });
+    }, EVENT_STREAM_SLOW_CONNECT_MS);
+    let result: EventStreamConnectionResult;
+    try {
+      result = await connectEvents(sid);
+    } finally {
+      clearTimeout(slowNotice);
+    }
+    if (result.status === "connected" || result.source.readyState === EventSource.OPEN) return;
+    if (eventSourceRef.current === result.source) eventSourceRef.current = null;
+    result.source.close();
+    throw new EventStreamConnectionError(result.status);
+  }, [addNotice, connectEvents]);
 
   const handleExtensionUiRequest = useCallback((request: IncomingExtensionUiRequest) => {
     switch (request.method) {
@@ -979,6 +1001,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         break;
       case "prompt_error":
         addNotice({ type: "error", message: (event.errorMessage as string | undefined) ?? translate("agentSession.commandFailed") });
+        // A failed prompt is terminal: no agent_end follows it. Without this the
+        // spinner and the locked input wait for the 15s reconcile poll.
+        if (agentRunningRef.current) void finishPromptWithoutStream(sessionIdRef.current);
         break;
       case "notice": {
         const level = event.level as string | undefined;
@@ -1172,22 +1197,28 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       }
     } catch (e) {
       console.error("Failed to send message:", e);
-      if (e instanceof EventStreamConnectionError) {
-        const optimisticKey = optimisticUserMessageKeyRef.current;
-        if (optimisticKey) {
-          setMessages((prev) => {
-            const last = prev[prev.length - 1];
-            return last?.role === "user" && userMessageKey(last) === optimisticKey
-              ? prev.slice(0, -1)
-              : prev;
-          });
-        }
-        addNotice({ type: "error", message: e.message });
-        // The prompt never reached the agent, so restore the user's text into
-        // the input instead of losing it. Mirrors the shell-command recovery in
-        // executeBash; insertIfEmpty avoids clobbering anything typed since.
-        if (message) opts.chatInputRef?.current?.insertIfEmpty(message);
+      // Every failure here (stream connect, ensure_session, set_model, the
+      // prompt POST itself) means the prompt never started, so roll the
+      // optimistic bubble back instead of leaving a ghost message.
+      const optimisticKey = optimisticUserMessageKeyRef.current;
+      if (optimisticKey) {
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          return last?.role === "user" && userMessageKey(last) === optimisticKey
+            ? prev.slice(0, -1)
+            : prev;
+        });
       }
+      addNotice({
+        type: "error",
+        message: e instanceof EventStreamConnectionError
+          ? e.message
+          : translate("agentSession.sendFailed", { detail: e instanceof Error ? e.message : String(e) }),
+      });
+      // Restore the user's text into the input instead of losing it. Mirrors the
+      // shell-command recovery in executeBash; insertIfEmpty avoids clobbering
+      // anything typed since.
+      if (message) opts.chatInputRef?.current?.insertIfEmpty(message);
       optimisticUserMessageKeyRef.current = null;
       agentRunningRef.current = false;
       setAgentRunning(false);
@@ -1374,7 +1405,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             ...(args ? { customInstructions: args } : {}),
           });
           setCompactResult(readCompactResult(result, "manual"));
-          if (await loadSession(sid, true)) promoteNewSession();
+          await loadSession(sid, true);
+          // loadSession resolves to null unless state was requested, so promote
+          // unconditionally — promoteNewSession no-ops for existing sessions and
+          // is idempotent via newSessionPromotedRef.
+          promoteNewSession();
           return complete({ handled: true, message: translate("agentSession.compactedContext") });
         }
 
@@ -1394,7 +1429,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (!sid) return complete({ handled: true, error: translate("agentSession.noSessionToName") });
           if (!args) return complete({ handled: true, error: translate("agentSession.nameUsage") });
           await sendAgentCommand(sid, { type: "set_session_name", name: args });
-          if (await loadSession(sid)) promoteNewSession();
+          await loadSession(sid);
+          promoteNewSession();
           return complete({ handled: true, message: translate("agentSession.sessionRenamed", { name: args }) });
         }
 
@@ -1446,8 +1482,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setQueuedMessages((prev) => ({ ...prev, steering: [...prev.steering, message] }));
     } catch (e) {
       console.error("Failed to steer:", e);
+      addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
+      opts.chatInputRef?.current?.insertIfEmpty(message);
     }
-  }, []);
+  }, [addNotice, opts.chatInputRef]);
 
   const handlePromptWithStreamingBehavior = useCallback(async (
     message: string,
@@ -1469,8 +1507,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         : { ...prev, followUp: [...prev.followUp, message] });
     } catch (e) {
       console.error("Failed to queue prompt:", e);
+      addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
+      opts.chatInputRef?.current?.insertIfEmpty(message);
     }
-  }, []);
+  }, [addNotice, opts.chatInputRef]);
 
   const handleFollowUp = useCallback(async (message: string, images?: AttachedImage[]) => {
     const sid = sessionIdRef.current;
@@ -1485,8 +1525,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setQueuedMessages((prev) => ({ ...prev, followUp: [...prev.followUp, message] }));
     } catch (e) {
       console.error("Failed to follow up:", e);
+      addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
+      opts.chatInputRef?.current?.insertIfEmpty(message);
     }
-  }, []);
+  }, [addNotice, opts.chatInputRef]);
 
   const handleAbortCompaction = useCallback(async () => {
     const sid = sessionIdRef.current;

@@ -18,10 +18,16 @@ export async function GET(
       return NextResponse.json({ error: "Session not found", code: "session_not_found" }, { status: 404 });
     }
 
-    const { header, entries } = loadSessionFile(filePath, {
+    const { header, entries, error: loadError } = loadSessionFile(filePath, {
       resolveBlobs: true,
       skipToolResultImages: deferToolResultImages,
     });
+    if (loadError === "too_large") {
+      return NextResponse.json(
+        { error: "Session file is too large to open in omp-web", code: "session_file_too_large" },
+        { status: 413 },
+      );
+    }
     if (!header) {
       return NextResponse.json({ error: "Session file is missing or malformed", code: "session_file_malformed" }, { status: 404 });
     }

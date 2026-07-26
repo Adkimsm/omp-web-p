@@ -19,13 +19,10 @@ export async function POST(
   const { id } = await params;
 
   try {
-    const filePath = await resolveSessionPath(id);
-    if (!filePath) {
-      return NextResponse.json({ error: "Session not found", code: "session_not_found" }, { status: 404 });
-    }
-
     // Running session: ask the live omp process (its in-memory title is newer
-    // than the file's slot while a rewrite is pending).
+    // than the file's slot while a rewrite is pending). This runs before the
+    // path check because omp does not create the session file until the history
+    // holds an assistant message.
     const rpc = getRpcSession(id);
     const running = Boolean(rpc?.isAlive?.());
     if (running && typeof rpc?.send === "function") {
@@ -39,6 +36,11 @@ export async function POST(
       } catch {
         // Fall through to the on-disk title.
       }
+    }
+
+    const filePath = await resolveSessionPath(id);
+    if (!filePath) {
+      return NextResponse.json({ error: "Session not found", code: "session_not_found" }, { status: 404 });
     }
 
     const info = scanSessionInfo(filePath, false);

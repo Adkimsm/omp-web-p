@@ -1,6 +1,15 @@
 import { NextResponse } from "next/server";
 import { readSessionHeader, resolveSessionPath } from "@/lib/session-reader";
-import { startRpcSession, getRpcSession } from "@/lib/rpc-manager";
+import { startRpcSession, getRpcSession, resolveSpawnCwd, WebRpcError } from "@/lib/rpc-manager";
+
+/** omp-web's own failures carry a stable code the client can localize; omp's
+ * errors stay opaque English text. */
+function commandErrorResponse(error: unknown) {
+  if (error instanceof WebRpcError) {
+    return NextResponse.json({ error: error.message, code: error.code }, { status: 400 });
+  }
+  return NextResponse.json({ error: String(error) }, { status: 500 });
+}
 
 // POST /api/agent/[id] - Send a command to an existing session
 export async function POST(
@@ -24,14 +33,14 @@ export async function POST(
       return NextResponse.json({ error: "Session not found", code: "session_not_found" }, { status: 404 });
     }
 
-    const cwd = readSessionHeader(filePath)?.cwd ?? process.cwd();
+    const cwd = resolveSpawnCwd(readSessionHeader(filePath)?.cwd);
 
     const { session } = await startRpcSession(id, filePath, cwd);
     const result = await session.send(body);
 
     return NextResponse.json({ success: true, data: result });
   } catch (error) {
-    return NextResponse.json({ error: String(error) }, { status: 500 });
+    return commandErrorResponse(error);
   }
 }
 
@@ -51,6 +60,6 @@ export async function GET(
     const state = await session.send({ type: "get_state" });
     return NextResponse.json({ running: true, state });
   } catch (error) {
-    return NextResponse.json({ error: String(error) }, { status: 500 });
+    return commandErrorResponse(error);
   }
 }

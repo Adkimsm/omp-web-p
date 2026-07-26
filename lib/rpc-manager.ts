@@ -1,4 +1,5 @@
 import { existsSync } from "fs";
+import { homedir } from "os";
 import { validateAgentImages } from "./image-attachments";
 import { invalidateModelsCache } from "./models-cache";
 import { RpcCommandError, RpcProcess, type RpcFrame } from "./omp/rpc-process";
@@ -33,6 +34,25 @@ interface CompactionResultLike {
 
 const IDLE_DESTROY_MS = 10 * 60 * 1000;
 const READY_TIMEOUT_MS = 120_000;
+
+const RESTARTING_MESSAGE = "This session is restarting — retry in a moment.";
+const BASH_EXCLUDE_MESSAGE =
+  "omp cannot run a shell command with its output excluded from the model context (`!!`): the RPC bash command has no exclusion option, so the output would silently enter the context anyway. Run it with a single `!` to share the output with the model, or use a terminal outside omp web.";
+
+/**
+ * Failure raised by omp-web itself (not by omp) carrying a stable snake_case
+ * code. API routes forward `{ error, code }` so the client dictionary can
+ * localize it via `errors.<code>` while unknown codes fall back to the text.
+ */
+export class WebRpcError extends Error {
+  readonly code: string;
+
+  constructor(message: string, code: string) {
+    super(message);
+    this.name = "WebRpcError";
+    this.code = code;
+  }
+}
 
 // Extension UI methods that stay pending until the client answers (replayed to
 // newly-attached SSE listeners so dialogs survive reconnects).
@@ -122,6 +142,34 @@ function toImageContents(value: unknown): Array<{ type: "image"; data: string; m
   return images?.length ? images : undefined;
 }
 
+/**
+ * Pick a spawn cwd that actually exists. A session records the directory it was
+ * created in, but that directory may have been deleted since: spawn() would
+ * fail with ENOENT and `omp --cwd <missing>` throws in setProjectDir. omp's own
+ * resume path skips the chdir when the recorded project dir is gone and keeps
+ * the launch cwd (main.ts), so hand it a live directory and let it decide.
+ */
+export function resolveSpawnCwd(recordedCwd?: string | null): string {
+  if (recordedCwd && existsSync(recordedCwd)) return recordedCwd;
+  try {
+    const serverCwd = process.cwd();
+    if (serverCwd && existsSync(serverCwd)) return serverCwd;
+  } catch {
+    // process.cwd() itself throws when the server's own cwd was removed.
+  }
+  return homedir();
+}
+
+/** omp's CompactionResult has no estimatedTokensAfter; approximate it from the
+ * summary so the compaction banner can show savings instead of "→ 0 tokens". */
+function patchEstimatedTokensAfter(result: unknown): void {
+  if (!result || typeof result !== "object") return;
+  const compaction = result as CompactionResultLike;
+  if (compaction.estimatedTokensAfter === undefined) {
+    compaction.estimatedTokensAfter = Math.round((compaction.summary?.length ?? 0) / 4);
+  }
+}
+
 // ============================================================================
 // AgentSessionWrapper
 // Wraps one spawned `omp --mode rpc-ui` process with the interface the rest of
@@ -131,6 +179,7 @@ function toImageContents(value: unknown): Array<{ type: "image"; data: string; m
 export class AgentSessionWrapper {
   private listeners: EventListener[] = [];
   private pendingUiRequests = new Map<string, AgentEvent>();
+  private uiExpiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private extensionStatuses = new Map<string, string>();
   private extensionWidgets = new Map<string, ExtensionWidgetItem>();
   private promptRunning = false;
@@ -239,6 +288,9 @@ export class AgentSessionWrapper {
         break;
       case "auto_compaction_end":
         this.compacting = false;
+        // Same patch the manual `compact` path applies — the client reads
+        // event.result.estimatedTokensAfter for the banner.
+        patchEstimatedTokensAfter(event.result);
         invalidateSessionListCache();
         break;
       case "session_info_update":
@@ -265,16 +317,40 @@ export class AgentSessionWrapper {
     notifyRunningChange();
   }
 
+  /** Forget a pending dialog and its expiry timer. */
+  private forgetPendingUiRequest(id: string): void {
+    this.pendingUiRequests.delete(id);
+    const timer = this.uiExpiryTimers.get(id);
+    if (timer) {
+      clearTimeout(timer);
+      this.uiExpiryTimers.delete(id);
+    }
+  }
+
+  private clearPendingUiRequests(): void {
+    for (const timer of this.uiExpiryTimers.values()) clearTimeout(timer);
+    this.uiExpiryTimers.clear();
+    this.pendingUiRequests.clear();
+  }
+
   private trackExtensionUiRequest(event: AgentEvent): void {
     const method = event.method as string;
     const id = event.id as string;
     if (method === "cancel") {
-      this.pendingUiRequests.delete(event.targetId as string);
+      this.forgetPendingUiRequest(event.targetId as string);
       return;
     }
     if (PENDING_UI_METHODS.has(method)) {
+      this.forgetPendingUiRequest(id);
       const timeout = typeof event.timeout === "number" ? event.timeout : undefined;
-      if (timeout) event.expiresAt = Date.now() + timeout;
+      if (timeout && timeout > 0) {
+        event.expiresAt = Date.now() + timeout;
+        // omp gives up on the dialog when its timeout elapses; drop it here too
+        // or it replays as a ghost dialog on every SSE (re)connect.
+        const timer = setTimeout(() => this.forgetPendingUiRequest(id), timeout);
+        timer.unref?.();
+        this.uiExpiryTimers.set(id, timer);
+      }
       this.pendingUiRequests.set(id, event);
       return;
     }
@@ -317,7 +393,15 @@ export class AgentSessionWrapper {
 
   onEvent(listener: EventListener): () => void {
     this.listeners.push(listener);
-    for (const event of this.pendingUiRequests.values()) listener(event);
+    const now = Date.now();
+    for (const [id, event] of this.pendingUiRequests) {
+      const expiresAt = event.expiresAt as number | undefined;
+      if (expiresAt !== undefined && expiresAt <= now) {
+        this.forgetPendingUiRequest(id);
+        continue;
+      }
+      listener(event);
+    }
     return () => {
       const i = this.listeners.indexOf(listener);
       if (i !== -1) this.listeners.splice(i, 1);
@@ -388,42 +472,57 @@ export class AgentSessionWrapper {
    * omp-web's `reload`: extensions, skills, prompts, and tools are rediscovered
    * on boot, matching a fresh CLI launch. */
   private async restart(): Promise<void> {
+    if (this.restarting) throw new WebRpcError(RESTARTING_MESSAGE, "session_restarting");
     const sessionFile = this._sessionFile;
     const resumable = !!sessionFile && existsSync(sessionFile);
     const old = this.proc;
+    // Stays true for the whole restart so send() rejects commands that would
+    // otherwise hit the disposed or half-built child.
     this.restarting = true;
     this.unsubscribeFrames?.();
     try {
       await old.dispose();
+      if (!this._alive) return;
+
+      this.extensionStatuses.clear();
+      this.extensionWidgets.clear();
+      this.clearPendingUiRequests();
+      this.promptRunning = false;
+      this.bashRunning = false;
+      this.streaming = false;
+      this.compacting = false;
+
+      const proc = new RpcProcess({
+        cwd: this.cwd,
+        extraArgs: buildSessionSpawnArgs(resumable ? sessionFile : ""),
+        onExit: ({ stderrTail }) => {
+          if (this.proc === proc) this.handleProcessExit(stderrTail);
+        },
+      });
+      this.proc = proc;
+      this.unsubscribeFrames = proc.onFrame((frame) => this.handleFrame(frame));
+      try {
+        await proc.waitReady(READY_TIMEOUT_MS);
+        const state = await proc.sendCommand<RpcSessionState>({ type: "get_state" });
+        this.applyIdentity(state);
+      } catch (error) {
+        // Never leave the replacement running with nobody reading its frames.
+        this.unsubscribeFrames?.();
+        this.unsubscribeFrames = null;
+        void proc.dispose();
+        // The wrapper has no usable child left; drop it from the registry so the
+        // next request starts a fresh session instead of reusing a corpse.
+        this.destroy();
+        throw error;
+      }
     } finally {
       this.restarting = false;
     }
-    if (!this._alive) return;
-
-    this.extensionStatuses.clear();
-    this.extensionWidgets.clear();
-    this.pendingUiRequests.clear();
-    this.promptRunning = false;
-    this.bashRunning = false;
-    this.streaming = false;
-    this.compacting = false;
-
-    const proc = new RpcProcess({
-      cwd: this.cwd,
-      extraArgs: buildSessionSpawnArgs(resumable ? sessionFile : ""),
-      onExit: ({ stderrTail }) => {
-        if (this.proc === proc) this.handleProcessExit(stderrTail);
-      },
-    });
-    this.proc = proc;
-    this.unsubscribeFrames = proc.onFrame((frame) => this.handleFrame(frame));
-    await proc.waitReady(READY_TIMEOUT_MS);
-    const state = await proc.sendCommand<RpcSessionState>({ type: "get_state" });
-    this.applyIdentity(state);
     notifyRunningChange();
   }
 
   async send(command: Record<string, unknown>): Promise<unknown> {
+    if (this.restarting) throw new WebRpcError(RESTARTING_MESSAGE, "session_restarting");
     if (!this.isAlive()) throw new Error("Session is no longer running");
     this.resetIdleTimer();
     const type = command.type as string;
@@ -539,11 +638,7 @@ export class AgentSessionWrapper {
                 type: "compact",
                 ...(command.customInstructions ? { customInstructions: command.customInstructions } : {}),
               });
-              // omp's CompactionResult has no estimatedTokensAfter; approximate
-              // from the summary so the UI banner can show savings.
-              if (result && result.estimatedTokensAfter === undefined) {
-                result.estimatedTokensAfter = Math.round((result.summary?.length ?? 0) / 4);
-              }
+              patchEstimatedTokensAfter(result);
               return result;
             } finally {
               this.compacting = false;
@@ -593,20 +688,25 @@ export class AgentSessionWrapper {
 
       case "extension_ui_response": {
         const { id, ...rest } = command as { id: string; [key: string]: unknown };
-        this.pendingUiRequests.delete(id);
+        this.forgetPendingUiRequest(id);
         this.proc.sendFrame({ type: "extension_ui_response", id, ...rest });
         return null;
       }
 
       case "bash": {
+        // omp's RPC bash command is `{type:"bash", command}` only (rpc-types.ts)
+        // — there is no excludeFromContext option anywhere in modes/rpc. Running
+        // a `!!` command anyway would put output the user meant to keep private
+        // into the model context, so refuse instead of silently ignoring it.
+        if (command.excludeFromContext === true) {
+          throw new WebRpcError(BASH_EXCLUDE_MESSAGE, "bash_exclude_unsupported");
+        }
         if (this.isRunning()) {
           throw new Error("Cannot run a shell command while the session is busy");
         }
         this.bashRunning = true;
         notifyRunningChange();
         try {
-          // Note: omp's RPC bash has no excludeFromContext option; the `!!`
-          // exclusion flag is accepted but ignored here.
           return await this.proc.sendCommand<BashResultInfo>({ type: "bash", command: command.command as string });
         } finally {
           this.bashRunning = false;
@@ -638,7 +738,7 @@ export class AgentSessionWrapper {
     this._alive = false;
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.unsubscribeFrames?.();
-    this.pendingUiRequests.clear();
+    this.clearPendingUiRequests();
     const disposed = this.proc.dispose().catch(() => {});
     this.onDestroyCallback?.();
     notifyRunningChange();
@@ -743,14 +843,16 @@ export async function startRpcSession(
   if (inflight) return inflight;
 
   const starting = (async () => {
-    let wrapper: AgentSessionWrapper | undefined;
+    // The wrapper needs the process and the process's onExit needs the wrapper;
+    // the holder breaks that cycle (onExit only fires once the child dies).
+    const holder: { wrapper?: AgentSessionWrapper } = {};
     const proc = new RpcProcess({
       cwd,
       extraArgs: buildSessionSpawnArgs(sessionFile, toolNames),
-      onExit: ({ stderrTail }) => wrapper?.handleProcessExit(stderrTail),
+      onExit: ({ stderrTail }) => holder.wrapper?.handleProcessExit(stderrTail),
     });
     const created = new AgentSessionWrapper(proc, cwd);
-    wrapper = created;
+    holder.wrapper = created;
     created.start();
     try {
       await created.waitUntilReady();
