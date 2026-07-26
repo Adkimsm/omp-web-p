@@ -1,0 +1,95 @@
+"use client";
+
+import { useCallback, useSyncExternalStore } from "react";
+import en from "./locales/en.json";
+import ja from "./locales/ja.json";
+import zhCN from "./locales/zh-CN.json";
+
+export type Locale = "en" | "zh-CN" | "ja";
+
+export const LOCALES: Array<{ value: Locale; label: string }> = [
+  { value: "en", label: "EN" },
+  { value: "zh-CN", label: "中文" },
+  { value: "ja", label: "日本語" },
+];
+
+const STORAGE_KEY = "omp-lang";
+
+const dictionaries: Record<Locale, Record<string, string>> = {
+  en: en as Record<string, string>,
+  "zh-CN": zhCN as Record<string, string>,
+  ja: ja as Record<string, string>,
+};
+
+const listeners = new Set<() => void>();
+let currentLocale: Locale | null = null;
+
+function detectLocale(): Locale {
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored === "en" || stored === "zh-CN" || stored === "ja") return stored;
+  } catch {
+    // storage unavailable (private mode etc.)
+  }
+  if (typeof navigator !== "undefined") {
+    const lang = navigator.language.toLowerCase();
+    if (lang.startsWith("zh")) return "zh-CN";
+    if (lang.startsWith("ja")) return "ja";
+  }
+  return "en";
+}
+
+function getLocale(): Locale {
+  if (typeof document === "undefined") return "en";
+  if (currentLocale === null) currentLocale = detectLocale();
+  return currentLocale;
+}
+
+export function setLocale(locale: Locale): void {
+  currentLocale = locale;
+  try {
+    localStorage.setItem(STORAGE_KEY, locale);
+  } catch {
+    // ignore storage errors
+  }
+  if (typeof document !== "undefined") {
+    document.documentElement.lang = locale;
+  }
+  listeners.forEach((cb) => cb());
+}
+
+/** Translate outside React (toasts, error helpers). Falls back key → en → key. */
+export function translate(key: string, vars?: Record<string, string | number>): string {
+  const locale = getLocale();
+  const template = dictionaries[locale][key] ?? dictionaries.en[key] ?? key;
+  if (!vars) return template;
+  return template.replace(/\{(\w+)\}/g, (match, name: string) =>
+    name in vars ? String(vars[name]) : match,
+  );
+}
+
+function subscribe(cb: () => void): () => void {
+  listeners.add(cb);
+  return () => {
+    listeners.delete(cb);
+  };
+}
+
+function getServerSnapshot(): Locale {
+  return "en";
+}
+
+/** Locale state + translator. Components re-render on language switch because
+ * the locale is the subscribed snapshot. */
+export function useI18n() {
+  const locale = useSyncExternalStore(subscribe, getLocale, getServerSnapshot);
+
+  const t = useCallback(
+    (key: string, vars?: Record<string, string | number>) => translate(key, vars),
+    // translate() reads module state that only changes with `locale`; depending
+    // on it keeps memoized consumers re-translating on switch.
+    [locale],
+  );
+
+  return { locale, setLocale, t };
+}

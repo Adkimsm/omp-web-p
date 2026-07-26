@@ -2,12 +2,19 @@ import { NextResponse } from "next/server";
 import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { completeSimple, type AssistantMessage } from "@earendil-works/pi-ai/compat";
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import {
+  type ModelDefinition,
+  type ProviderConfig,
+  serializeModelsConfig,
+  validateModelsConfig,
+} from "@/lib/omp/models-config";
+import { type OmpModel, runIsolatedUtilityCommand } from "@/lib/omp/rpc-utility";
 
 export const dynamic = "force-dynamic";
 
-const TEST_TIMEOUT_MS = 20_000;
+// Registry resolution (spawn + model discovery), not a completion round-trip:
+// omp-web cannot send test prompts without going through a full agent session.
+const TEST_TIMEOUT_MS = 60_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -15,13 +22,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function getAssistantText(message: AssistantMessage): string {
-  return message.content
-    .filter((block) => block.type === "text")
-    .map((block) => block.text)
-    .join("");
 }
 
 export async function POST(req: Request) {
@@ -37,71 +37,50 @@ export async function POST(req: Request) {
     const modelId = typeof body.model.id === "string" ? body.model.id.trim() : "";
     if (!modelId) return NextResponse.json({ ok: false, error: "Model ID is required" }, { status: 400 });
 
-    tempDir = mkdtempSync(join(tmpdir(), "pi-web-model-test-"));
-    const modelsPath = join(tempDir, "models.json");
-    writeFileSync(modelsPath, JSON.stringify({
+    const config = {
       providers: {
         [providerName]: {
-          ...body.provider,
-          models: [{ ...body.model, id: modelId }],
+          ...(body.provider as ProviderConfig),
+          models: [{ ...(body.model as ModelDefinition), id: modelId }],
         },
       },
-    }, null, 2), "utf8");
-
-    const modelRuntime = await ModelRuntime.create({ modelsPath });
-    const loadError = modelRuntime.getError();
-    if (loadError) return NextResponse.json({ ok: false, error: loadError });
-
-    const model = modelRuntime.getModel(providerName, modelId);
-    if (!model) return NextResponse.json({ ok: false, error: `Model not found: ${providerName}/${modelId}` });
-
-    const resolved = await modelRuntime.getAuth(model);
-    if (!resolved?.auth.apiKey) {
-      return NextResponse.json({ ok: false, error: `No API key found for "${providerName}"` });
-    }
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), TEST_TIMEOUT_MS);
-    let status: number | undefined;
-    const startedAt = Date.now();
-
+    };
     try {
-      const message = await completeSimple(model, {
-        messages: [{
-          role: "user",
-          content: "Reply with OK only.",
-          timestamp: Date.now(),
-        }],
-      }, {
-        apiKey: resolved.auth.apiKey,
-        headers: resolved.auth.headers,
-        maxTokens: 16,
-        timeoutMs: TEST_TIMEOUT_MS,
-        maxRetries: 0,
-        cacheRetention: "none",
-        signal: controller.signal,
-        onResponse: (response) => { status = response.status; },
-      });
-
-      const latencyMs = Date.now() - startedAt;
-      if (message.stopReason === "error" || message.stopReason === "aborted") {
-        return NextResponse.json({
-          ok: false,
-          error: message.errorMessage ?? (controller.signal.aborted ? "Test timed out" : "Model returned an error"),
-          latencyMs,
-          status,
-        });
-      }
-
-      return NextResponse.json({
-        ok: true,
-        latencyMs,
-        status,
-        responseText: getAssistantText(message).slice(0, 300),
-      });
-    } finally {
-      clearTimeout(timeout);
+      validateModelsConfig(config);
+    } catch (error) {
+      return NextResponse.json({ ok: false, error: errorMessage(error) });
     }
+
+    // Isolated throwaway agent dir: the spawned omp sees only this candidate
+    // config (no stored credentials, no models.db cache) and never touches
+    // ~/.omp. Profile/XDG overrides are cleared so the redirect always wins.
+    tempDir = mkdtempSync(join(tmpdir(), "omp-web-model-test-"));
+    writeFileSync(join(tempDir, "models.yml"), serializeModelsConfig(config), "utf8");
+
+    const startedAt = Date.now();
+    const { models } = await runIsolatedUtilityCommand<{ models: OmpModel[] }>(
+      { type: "get_available_models" },
+      {
+        env: { PI_CODING_AGENT_DIR: tempDir, OMP_PROFILE: "", PI_PROFILE: "", XDG_DATA_HOME: "" },
+        timeoutMs: TEST_TIMEOUT_MS,
+      },
+    );
+    const latencyMs = Date.now() - startedAt;
+
+    const found = models.find((m) => m.provider === providerName && m.id === modelId);
+    if (!found) {
+      return NextResponse.json({
+        ok: false,
+        error: `Model ${providerName}/${modelId} did not resolve — check the API key and provider config`,
+        latencyMs,
+      });
+    }
+
+    return NextResponse.json({
+      ok: true,
+      latencyMs,
+      responseText: `${found.provider}/${found.id} resolved (config + credentials OK; no test prompt sent)`,
+    });
   } catch (error) {
     return NextResponse.json({ ok: false, error: errorMessage(error) }, { status: 500 });
   } finally {

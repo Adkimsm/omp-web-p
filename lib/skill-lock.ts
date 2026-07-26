@@ -129,15 +129,17 @@ export function annotateSkillsWithInstallInfo(
 ): SkillInfo[] {
   const globalEntries = readSkillLock(globalLockPath);
   const projectEntries = readSkillLock(projectLockPath);
-  const globalSkillsRoot = join(agentDir, "skills");
-  const projectSkillsRoot = join(cwd, ".pi", "skills");
+  // skills.sh installs with --agent universal land in .agents/skills; omp's
+  // own dirs remain valid install roots for manually placed skills.
+  const globalSkillsRoots = [join(agentDir, "skills"), join(homedir(), ".agents", "skills")];
+  const projectSkillsRoots = [join(cwd, ".omp", "skills"), join(cwd, ".agents", "skills")];
 
   return skills.map((skill) => {
     if (!existsSync(skill.filePath)) return skill;
 
-    const install = isWithin(skill.filePath, globalSkillsRoot)
+    const install = globalSkillsRoots.some((root) => isWithin(skill.filePath, root))
       ? getInstallInfo(globalEntries, skill.name, "global")
-      : isWithin(skill.filePath, projectSkillsRoot)
+      : projectSkillsRoots.some((root) => isWithin(skill.filePath, root))
         ? getInstallInfo(projectEntries, skill.name, "project")
         : undefined;
 

@@ -1,40 +1,22 @@
 import { NextResponse } from "next/server";
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
-import { join, dirname } from "path";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { invalidateModelsCache } from "@/lib/models-cache";
+import { readModelsConfig, validateModelsConfig, writeModelsConfig, type ModelsFileConfig } from "@/lib/omp/models-config";
 
 export const dynamic = "force-dynamic";
 
-function getModelsPath(): string {
-  return join(getAgentDir(), "models.json");
-}
-
-function readModelsJson(): Record<string, unknown> {
-  const path = getModelsPath();
-  if (!existsSync(path)) return { providers: {} };
-  try {
-    return JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
-  } catch {
-    return { providers: {} };
-  }
-}
-
-function writeModelsJson(data: Record<string, unknown>): void {
-  const path = getModelsPath();
-  const dir = dirname(path);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(path, JSON.stringify(data, null, 2), "utf8");
-}
-
 export async function GET() {
-  return NextResponse.json(readModelsJson());
+  return NextResponse.json(readModelsConfig());
 }
 
 export async function PUT(req: Request) {
   try {
-    const body = await req.json() as Record<string, unknown>;
-    writeModelsJson(body);
+    const body = await req.json() as ModelsFileConfig;
+    try {
+      validateModelsConfig(body);
+    } catch (error) {
+      return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 });
+    }
+    writeModelsConfig(body);
     invalidateModelsCache();
     return NextResponse.json({ success: true });
   } catch (error) {

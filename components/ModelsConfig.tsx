@@ -95,7 +95,6 @@ interface ApiKeyProvider {
   id: string;
   displayName: string;
   configured: boolean;
-  source?: string;
   modelCount: number;
 }
 
@@ -110,12 +109,21 @@ type OAuthLoginState =
   | { phase: "success" }
   | { phase: "error"; message: string };
 
+// Mirrors the ModelThinkingSchema subset of omp's models.yml
+// (oh-my-pi/packages/coding-agent/src/config/models-config-schema.ts).
+interface ThinkingConfig {
+  mode?: string;
+  efforts?: string[];
+  defaultLevel?: string;
+  effortMap?: Record<string, string>;
+}
+
 interface ModelEntry {
   id: string;
   name?: string;
   api?: string;
   reasoning?: boolean;
-  thinkingLevelMap?: Record<string, string | null>;
+  thinking?: ThinkingConfig;
   input?: string[];
   contextWindow?: number;
   maxTokens?: number;
@@ -127,13 +135,14 @@ interface ProviderEntry {
   baseUrl?: string;
   api?: string;
   apiKey?: string;
+  auth?: "apiKey" | "none" | "oauth";
   headers?: Record<string, string>;
   compat?: Record<string, unknown>;
   models?: ModelEntry[];
   modelOverrides?: Record<string, unknown>;
 }
 
-interface ModelsJson {
+interface ModelsFileData {
   providers?: Record<string, ProviderEntry>;
 }
 
@@ -149,7 +158,18 @@ type Selection =
   | { type: "oauth"; providerId: string }
   | { type: "apikey"; providerId: string };
 
-const API_OPTIONS = ["openai-completions", "openai-responses", "anthropic-messages", "google-generative-ai"] as const;
+// omp's models.yml ApiSchema (config/models-config-schema.ts)
+const API_OPTIONS = [
+  "openai-completions",
+  "openai-responses",
+  "openai-codex-responses",
+  "azure-openai-responses",
+  "anthropic-messages",
+  "bedrock-converse-stream",
+  "google-generative-ai",
+  "google-gemini-cli",
+  "google-vertex",
+] as const;
 
 // ── Form field helpers ────────────────────────────────────────────────────────
 
@@ -332,6 +352,9 @@ function ProviderDetail({ name, provider, onChange, onRename, onDelete }: {
         </span>
       </Field>
 
+      <Check label="No API key required (auth: none)" checked={provider.auth === "none"}
+        onChange={(v) => set("auth", v ? "none" : undefined)} />
+
       <Field label="API">
         <Select value={provider.api ?? "openai-completions"} onChange={(v) => set("api", v)} options={API_OPTIONS} required />
       </Field>
@@ -339,13 +362,15 @@ function ProviderDetail({ name, provider, onChange, onRename, onDelete }: {
   );
 }
 
-// ── ThinkingLevelMap editor ───────────────────────────────────────────────────
+// ── Thinking levels editor ────────────────────────────────────────────────────
+// Edits omp's `thinking` config: `efforts` lists the enabled levels, and
+// `effortMap` overrides the string sent on the wire for a level. When every
+// row is Default the config is omitted and omp derives the ladder itself.
 
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+const THINKING_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
 type ThinkingLevel = typeof THINKING_LEVELS[number];
 
 const LEVEL_COLORS: Record<ThinkingLevel, string> = {
-  off:     "var(--text-dim)",
   minimal: "#6b7280",
   low:     "#60a5fa",
   medium:  "#a78bfa",
@@ -354,31 +379,49 @@ const LEVEL_COLORS: Record<ThinkingLevel, string> = {
   max:     "#ef4444",
 };
 
-function ThinkingLevelMapEditor({
+function ThinkingEditor({
   value,
   onChange,
 }: {
-  value: Record<string, string | null> | undefined;
-  onChange: (v: Record<string, string | null> | undefined) => void;
+  value: ThinkingConfig | undefined;
+  onChange: (v: ThinkingConfig | undefined) => void;
 }) {
-  const map = value ?? {};
+  const efforts = value?.efforts;
+  const effortMap = value?.effortMap ?? {};
 
   const setLevel = (level: ThinkingLevel, entry: string | null | "omit") => {
-    const next = { ...map };
-    if (entry === "omit") {
-      delete next[level];
+    // entry: "omit" → enabled with the default wire value; null → level
+    // disabled (excluded from efforts); string → enabled with a custom value.
+    const included = new Set<string>(efforts ?? [...THINKING_LEVELS]);
+    const map: Record<string, string> = { ...effortMap };
+    if (entry === null) {
+      included.delete(level);
+      delete map[level];
     } else {
-      next[level] = entry;
+      included.add(level);
+      if (entry === "omit") delete map[level];
+      else map[level] = entry;
     }
-    onChange(Object.keys(next).length ? next : undefined);
+    const ordered = THINKING_LEVELS.filter((l) => included.has(l));
+    if (ordered.length === 0 || (ordered.length === THINKING_LEVELS.length && Object.keys(map).length === 0)) {
+      onChange(undefined);
+      return;
+    }
+    onChange({
+      ...(value ?? {}),
+      mode: value?.mode ?? "effort",
+      efforts: ordered,
+      effortMap: Object.keys(map).length ? map : undefined,
+    });
   };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
       {THINKING_LEVELS.map((level) => {
-        const raw = map[level];
+        const disabled = efforts !== undefined && !efforts.includes(level);
+        const raw = disabled ? null : effortMap[level];
         const state: "omit" | "null" | "string" =
-          !(level in map) ? "omit" : raw === null ? "null" : "string";
+          disabled ? "null" : typeof raw === "string" ? "string" : "omit";
         const strVal = typeof raw === "string" ? raw : "";
         const color = LEVEL_COLORS[level];
 
@@ -482,26 +525,6 @@ function ThinkingLevelMapEditor({
 
 // ── Model detail ──────────────────────────────────────────────────────────────
 
-const DEEPSEEK_COMPAT = {
-  thinkingFormat: "deepseek",
-  requiresReasoningContentOnAssistantMessages: true,
-} as const;
-
-function hasDeepseekCompat(model: ModelEntry): boolean {
-  return model.compat?.thinkingFormat === "deepseek";
-}
-
-function setDeepseekCompat(model: ModelEntry, enabled: boolean): ModelEntry {
-  if (enabled) {
-    return { ...model, compat: { ...(model.compat ?? {}), ...DEEPSEEK_COMPAT } };
-  }
-  if (!model.compat) return model;
-  const rest = { ...model.compat };
-  delete rest.thinkingFormat;
-  delete rest.requiresReasoningContentOnAssistantMessages;
-  return { ...model, compat: Object.keys(rest).length ? rest : undefined };
-}
-
 function ModelDetail({
   providerName,
   provider,
@@ -524,13 +547,13 @@ function ModelDetail({
   };
   const testSummary = (() => {
     if (testState.phase === "idle") return null;
-    if (testState.phase === "testing") return "Testing model connection...";
+    if (testState.phase === "testing") return "Validating model config...";
     const meta = [
       testState.latencyMs !== undefined ? `${testState.latencyMs}ms` : null,
       testState.status !== undefined ? `HTTP ${testState.status}` : null,
     ].filter(Boolean);
     if (testState.phase === "success") {
-      return ["Connected", ...meta, testState.responseText || null].filter(Boolean).join(" · ");
+      return ["OK", ...meta, testState.responseText || null].filter(Boolean).join(" · ");
     }
     return ["Failed", ...meta, testState.message].filter(Boolean).join(" · ");
   })();
@@ -606,7 +629,7 @@ function ModelDetail({
           <button
             onClick={handleTest}
             disabled={!model.id.trim() || testState.phase === "testing"}
-            title="Test model connection"
+            title="Validate the provider/model config (no test prompt is sent)"
             style={{
               height: 24,
               padding: "0 8px",
@@ -653,30 +676,23 @@ function ModelDetail({
       </div>
 
       {model.reasoning && (
-        <>
-          <Check
-            label="DeepSeek thinking compat"
-            checked={hasDeepseekCompat(model)}
-            onChange={(v) => onChange(setDeepseekCompat(model, v))}
-          />
-          <div>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-              <SectionTitle>Thinking level map</SectionTitle>
-              {model.thinkingLevelMap && (
-                <button
-                  onClick={() => set("thinkingLevelMap", undefined)}
-                  style={{ fontSize: 10, padding: "2px 7px", background: "none", border: "1px solid var(--border)", borderRadius: 4, color: "var(--text-dim)", cursor: "pointer" }}
-                >
-                  clear all
-                </button>
-              )}
-            </div>
-            <ThinkingLevelMapEditor
-              value={model.thinkingLevelMap}
-              onChange={(v) => set("thinkingLevelMap", v)}
-            />
+        <div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+            <SectionTitle>Thinking levels</SectionTitle>
+            {model.thinking && (
+              <button
+                onClick={() => set("thinking", undefined)}
+                style={{ fontSize: 10, padding: "2px 7px", background: "none", border: "1px solid var(--border)", borderRadius: 4, color: "var(--text-dim)", cursor: "pointer" }}
+              >
+                reset to auto
+              </button>
+            )}
           </div>
-        </>
+          <ThinkingEditor
+            value={model.thinking}
+            onChange={(v) => set("thinking", v)}
+          />
+        </div>
       )}
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
@@ -782,9 +798,19 @@ function OAuthDetail({ provider, onRefresh }: { provider: OAuthProvider; onRefre
   }, [provider.id, onRefresh]);
 
   const handleLogout = useCallback(async () => {
-    await fetch(`/api/auth/logout/${encodeURIComponent(provider.id)}`, { method: "POST" });
-    setLoginState({ phase: "idle" });
-    onRefresh();
+    try {
+      const res = await fetch(`/api/auth/logout/${encodeURIComponent(provider.id)}`, { method: "POST" });
+      const d = await res.json().catch(() => ({})) as { error?: string };
+      if (!res.ok || d.error) {
+        // omp has no logout RPC/CLI surface; the route returns 501 with guidance.
+        setLoginState({ phase: "error", message: d.error ?? `HTTP ${res.status}` });
+        return;
+      }
+      setLoginState({ phase: "idle" });
+      onRefresh();
+    } catch (e) {
+      setLoginState({ phase: "error", message: e instanceof Error ? e.message : String(e) });
+    }
   }, [provider.id, onRefresh]);
 
   const submitCode = useCallback(async (token: string, code: string) => {
@@ -964,63 +990,10 @@ function OAuthDetail({ provider, onRefresh }: { provider: OAuthProvider; onRefre
 }
 
 // ── API Key detail ────────────────────────────────────────────────────────────
+// omp keeps API keys in its own encrypted credential store (agent.db), which
+// omp-web never reads or writes — this panel is status-only.
 
-function ApiKeyDetail({ provider, onRefresh }: { provider: ApiKeyProvider; onRefresh: () => void }) {
-  const [apiKey, setApiKey] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [removing, setRemoving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [savedOk, setSavedOk] = useState(false);
-
-  // Reset state when provider changes
-  useEffect(() => {
-    setApiKey("");
-    setError(null);
-    setSavedOk(false);
-  }, [provider.id]);
-
-  const handleSave = useCallback(async () => {
-    if (!apiKey.trim()) return;
-    setSaving(true);
-    setError(null);
-    setSavedOk(false);
-    try {
-      const res = await fetch(`/api/auth/api-key/${encodeURIComponent(provider.id)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey: apiKey.trim() }),
-      });
-      const d = await res.json() as { success?: boolean; error?: string };
-      if (!res.ok || d.error) {
-        setError(d.error ?? `HTTP ${res.status}`);
-      } else {
-        setApiKey("");
-        setSavedOk(true);
-        setTimeout(() => setSavedOk(false), 2000);
-        onRefresh();
-      }
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setSaving(false);
-    }
-  }, [apiKey, provider.id, onRefresh]);
-
-  const handleRemove = useCallback(async () => {
-    setRemoving(true);
-    setError(null);
-    try {
-      const res = await fetch(`/api/auth/api-key/${encodeURIComponent(provider.id)}`, { method: "DELETE" });
-      const d = await res.json() as { success?: boolean; error?: string };
-      if (!res.ok || d.error) setError(d.error ?? `HTTP ${res.status}`);
-      else onRefresh();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setRemoving(false);
-    }
-  }, [provider.id, onRefresh]);
-
+function ApiKeyDetail({ provider }: { provider: ApiKeyProvider }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -1035,61 +1008,18 @@ function ApiKeyDetail({ provider, onRefresh }: { provider: ApiKeyProvider; onRef
 
       <p style={{ margin: 0, fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5 }}>
         {provider.configured
-          ? `API key is stored. Enter a new key below to replace it, or disconnect to remove it.`
-          : `Enter your ${provider.displayName} API key to enable ${provider.modelCount} model${provider.modelCount !== 1 ? "s" : ""}.`}
+          ? `${provider.displayName} is configured — ${provider.modelCount} model${provider.modelCount !== 1 ? "s" : ""} available. omp resolved its API key from an environment variable, omp's credential store, or models.yml.`
+          : `${provider.displayName} is not configured.`}
       </p>
 
-      <Field label="API Key">
-        <div style={{ display: "flex", gap: 6 }}>
-          <SecretTextInput
-            value={apiKey}
-            onChange={setApiKey}
-            onKeyDown={(e) => { if (e.key === "Enter" && apiKey.trim()) handleSave(); }}
-            placeholder={provider.configured ? "Enter new key to replace…" : "sk-…"}
-            style={{ flex: 1 }}
-            autoComplete="off"
-            spellCheck={false}
-            mono
-          />
-          <button
-            onClick={handleSave}
-            disabled={saving || !apiKey.trim() || savedOk}
-            style={{
-              padding: "6px 12px",
-              background: savedOk ? "#16a34a" : apiKey.trim() ? "var(--accent)" : "var(--bg-panel)",
-              border: "none", borderRadius: 5,
-              color: (apiKey.trim() || savedOk) ? "#fff" : "var(--text-dim)",
-              cursor: (saving || !apiKey.trim() || savedOk) ? "not-allowed" : "pointer",
-              fontSize: 12, fontWeight: 600, flexShrink: 0,
-              display: "flex", alignItems: "center", gap: 5,
-            }}
-          >
-            {savedOk && (
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="20 6 9 17 4 12" />
-              </svg>
-            )}
-            {savedOk ? "Saved" : saving ? "Saving…" : "Save"}
-          </button>
-        </div>
-      </Field>
-
-      {error && <p style={{ margin: 0, fontSize: 12, color: "#f87171" }}>{error}</p>}
-
-      {provider.configured && (
-        <button
-          onClick={handleRemove}
-          disabled={removing}
-          style={{
-            alignSelf: "flex-start", padding: "5px 12px",
-            background: "none", border: "1px solid rgba(239,68,68,0.3)",
-            borderRadius: 5, color: "#ef4444",
-            cursor: removing ? "not-allowed" : "pointer", fontSize: 12,
-          }}
-        >
-          {removing ? "Removing…" : "Disconnect"}
-        </button>
-      )}
+      <p style={{ margin: 0, fontSize: 11, color: "var(--text-dim)", lineHeight: 1.5 }}>
+        API keys are managed by omp itself and cannot be changed here. To add or remove a key, run{" "}
+        <code style={{ fontFamily: "var(--font-mono)" }}>omp</code> in a terminal and use{" "}
+        <code style={{ fontFamily: "var(--font-mono)" }}>/login</code> /{" "}
+        <code style={{ fontFamily: "var(--font-mono)" }}>/logout</code>, set the provider&apos;s environment
+        variable (e.g. <code style={{ fontFamily: "var(--font-mono)" }}>OPENAI_API_KEY</code>), or configure a
+        custom provider with an <code style={{ fontFamily: "var(--font-mono)" }}>apiKey</code> in models.yml.
+      </p>
     </div>
   );
 }
@@ -1273,7 +1203,7 @@ function AddProviderPicker({
 
 export function ModelsConfig({ onClose }: { onClose: () => void }) {
   const isMobile = useIsMobile();
-  const [config, setConfig] = useState<ModelsJson>({ providers: {} });
+  const [config, setConfig] = useState<ModelsFileData>({ providers: {} });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -1300,7 +1230,7 @@ export function ModelsConfig({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     fetch("/api/models-config")
       .then((r) => r.json())
-      .then((d: ModelsJson) => {
+      .then((d: ModelsFileData) => {
         const normalized = d.providers ? d : { ...d, providers: {} };
         setConfig(normalized);
         const keys = Object.keys(normalized.providers ?? {});
@@ -1420,7 +1350,7 @@ export function ModelsConfig({ onClose }: { onClose: () => void }) {
     if (selection.type === "apikey") {
       const p = apiKeyProviders.find((p) => p.id === selection.providerId);
       if (!p) return null;
-      return <ApiKeyDetail key={p.id} provider={p} onRefresh={loadApiKeyProviders} />;
+      return <ApiKeyDetail key={p.id} provider={p} />;
     }
     if (selection.type === "provider") {
       const provider = config.providers?.[selection.name];
@@ -1461,7 +1391,7 @@ export function ModelsConfig({ onClose }: { onClose: () => void }) {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 18px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
             <span style={{ fontSize: 15, fontWeight: 700, color: "var(--text)" }}>Models</span>
-            <code style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>~/.pi/agent/models.json</code>
+            <code style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>~/.omp/agent/models.yml</code>
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 20, lineHeight: 1, padding: "2px 6px" }}>×</button>
         </div>

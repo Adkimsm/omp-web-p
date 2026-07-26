@@ -11,8 +11,8 @@ import type {
 } from "@/lib/types";
 import { normalizeToolCalls } from "@/lib/normalize";
 import { sendAgentCommand } from "@/lib/agent-client";
-import { getToolNamesForPreset, type ToolEntry } from "@/lib/tool-presets";
-import type { SessionStatsInfo } from "@/lib/pi-types";
+import { getToolNamesForPreset } from "@/lib/tool-presets";
+import type { RpcAvailableSlashCommand, SessionStatsInfo } from "@/lib/pi-types";
 
 export interface SessionData {
   sessionId: string;
@@ -66,6 +66,7 @@ interface LastAssistantTextResponse {
   text?: string;
 }
 
+// Shape of lib/rpc-manager's WebSessionState as seen over HTTP.
 type AgentStateResponse = {
   contextUsage?: { percent: number | null; contextWindow: number; tokens: number | null } | null;
   systemPrompt?: string;
@@ -76,7 +77,8 @@ type AgentStateResponse = {
   isCompacting?: boolean;
   extensionStatuses?: ExtensionStatusItem[];
   extensionWidgets?: ExtensionWidgetItem[];
-  queuedMessages?: { steering?: string[]; followUp?: string[] } | null;
+  // omp only reports a count; the queued texts are tracked client-side.
+  queuedMessageCount?: number;
 };
 
 export interface QueuedMessages {
@@ -84,12 +86,21 @@ export interface QueuedMessages {
   followUp: string[];
 }
 
-function normalizeQueuedMessages(q?: { steering?: string[]; followUp?: string[] } | null): QueuedMessages {
-  return { steering: q?.steering ?? [], followUp: q?.followUp ?? [] };
+const EMPTY_QUEUE: QueuedMessages = { steering: [], followUp: [] };
+
+function normalizeThinkingLevel(level: string | undefined): ThinkingLevelOption {
+  // omp's "inherit" sentinel means "no explicit selection" — show as auto.
+  if (!level || level === "inherit") return "auto";
+  return level as ThinkingLevelOption;
 }
 
 type ExtensionUiDialogRequest = Extract<ExtensionUiRequest, { method: "select" | "confirm" | "input" | "editor" }>;
 type ExtensionUiCustomRequest = Extract<ExtensionUiRequest, { method: "custom" }>;
+// omp's rpc-ui frames add open_url (OAuth) and cancel on top of lib/types' union.
+type IncomingExtensionUiRequest =
+  | ExtensionUiRequest
+  | { type: "extension_ui_request"; id: string; method: "open_url"; url: string; launchUrl?: string; instructions?: string }
+  | { type: "extension_ui_request"; id: string; method: "cancel"; targetId: string };
 export type NoticeType = "info" | "success" | "warning" | "error";
 
 export type NoticeItem = {
@@ -289,8 +300,14 @@ function userMessageKey(message: Partial<AgentMessage>): string {
 function readCompactResult(result: unknown, reason: string): CompactResultInfo | null {
   if (!result || typeof result !== "object") return null;
   const r = result as CompactCommandResult;
-  if (typeof r.tokensBefore !== "number" || typeof r.estimatedTokensAfter !== "number") return null;
-  return { reason, tokensBefore: r.tokensBefore, estimatedTokensAfter: r.estimatedTokensAfter };
+  if (typeof r.tokensBefore !== "number") return null;
+  // The server estimates estimatedTokensAfter from the summary when omp's
+  // CompactionResult omits it; default to 0 as a last resort.
+  return {
+    reason,
+    tokensBefore: r.tokensBefore,
+    estimatedTokensAfter: typeof r.estimatedTokensAfter === "number" ? r.estimatedTokensAfter : 0,
+  };
 }
 
 export interface ChatInputHandle {
@@ -318,8 +335,21 @@ type ModelsResponse = {
 };
 
 type SlashCommandsResponse = {
-  commands?: SlashCommandInfo[];
+  commands?: RpcAvailableSlashCommand[];
 };
+
+// Map omp's slash-command sources onto the palette's grouping. Builtins are
+// skipped: the client intercepts its own builtin set, and other omp builtins
+// still work when typed (omp executes them via the prompt command).
+function toSlashCommandInfo(command: RpcAvailableSlashCommand): SlashCommandInfo | null {
+  if (command.source === "builtin") return null;
+  const source: SlashCommandInfo["source"] = command.source === "extension"
+    ? "extension"
+    : command.source === "skill"
+      ? "skill"
+      : "prompt";
+  return { name: command.name, description: command.description, source };
+}
 
 export function useAgentSession(opts: UseAgentSessionOptions) {
   const {
@@ -473,13 +503,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         const liveState = agentState.state;
         if (liveState) {
           if (liveState.contextUsage !== undefined) setContextUsage(liveState.contextUsage ?? null);
-          if (liveState.systemPrompt !== undefined) setSystemPrompt(liveState.systemPrompt ?? null);
-          if (liveState.thinkingLevel !== undefined) setThinkingLevel((liveState.thinkingLevel as ThinkingLevelOption) ?? "auto");
+          if (liveState.systemPrompt !== undefined) setSystemPrompt(liveState.systemPrompt || null);
+          if (liveState.thinkingLevel !== undefined) setThinkingLevel(normalizeThinkingLevel(liveState.thinkingLevel));
           if (liveState.extensionStatuses !== undefined) setExtensionStatuses(liveState.extensionStatuses ?? []);
           if (liveState.extensionWidgets !== undefined) setExtensionWidgets(liveState.extensionWidgets ?? []);
-          if (liveState.queuedMessages !== undefined) setQueuedMessages(normalizeQueuedMessages(liveState.queuedMessages));
+          if (liveState.queuedMessageCount === 0) setQueuedMessages(EMPTY_QUEUE);
         } else if (!agentState.running) {
-          setQueuedMessages({ steering: [], followUp: [] });
+          setQueuedMessages(EMPTY_QUEUE);
         }
         return agentState;
       } catch (e) {
@@ -509,17 +539,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, []);
 
-  const loadTools = useCallback(async (sid: string) => {
-    try {
-      const tools = await sendAgentCommand<ToolEntry[]>(sid, { type: "get_tools" });
-      if (tools) {
-        const { getPresetFromTools } = await import("@/lib/tool-presets");
-        setToolPresetState(getPresetFromTools(tools));
-      }
-    } catch (e) {
-      console.error("Failed to load tools:", e);
-    }
-  }, [setToolPresetState]);
+  // omp's RPC protocol has no per-session tool listing; the preset shown for a
+  // resumed session stays at its default. Kept as an exported no-op so callers
+  // (mount, /reload) need no changes.
+  const loadTools = useCallback(async (_sid: string) => {}, []);
 
   const promoteNewSession = useCallback((messageCount = 0, firstMessage = "(no messages)") => {
     const sid = sessionIdRef.current;
@@ -581,7 +604,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     setSlashCommandsLoading(true);
     try {
       const data = await sendAgentCommand<SlashCommandsResponse>(sid, { type: "get_commands" });
-      const commands = data?.commands ?? [];
+      const commands = (data?.commands ?? [])
+        .map(toSlashCommandInfo)
+        .filter((c): c is SlashCommandInfo => c !== null);
       setSlashCommands(commands);
       return commands;
     } catch (e) {
@@ -693,7 +718,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     });
   }, []);
 
-  const handleExtensionUiRequest = useCallback((request: ExtensionUiRequest) => {
+  const handleExtensionUiRequest = useCallback((request: IncomingExtensionUiRequest) => {
     switch (request.method) {
       case "select":
       case "confirm":
@@ -701,6 +726,25 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       case "editor":
         setExtensionDialog(request);
         break;
+      case "cancel":
+        setExtensionDialog((current) => current?.id === request.targetId ? null : current);
+        break;
+      case "open_url": {
+        // OAuth and similar flows: try to open a tab (often blocked outside a
+        // user gesture), and always surface the URL as a notice fallback.
+        const url = request.launchUrl ?? request.url;
+        try {
+          window.open(url, "_blank", "noopener,noreferrer");
+        } catch {
+          // Pop-up blocked — the notice below still carries the URL.
+        }
+        addNotice({
+          id: request.id,
+          type: "info",
+          message: request.instructions ? `${request.instructions}\n${url}` : `Open in your browser: ${url}`,
+        });
+        break;
+      }
       case "notify": {
         addNotice({
           id: request.id,
@@ -833,7 +877,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       // would otherwise leave the "Stop compaction" UI stuck. No state
       // (wrapper destroyed) means nothing is compacting.
       setIsCompacting(state?.isCompacting ?? false);
-      setQueuedMessages(normalizeQueuedMessages(state?.queuedMessages));
+      if (!state || state.queuedMessageCount === 0) setQueuedMessages(EMPTY_QUEUE);
       const busy = data.running && state
         && (state.isStreaming || state.isPromptRunning || state.isCompacting);
       if (busy || !agentRunningRef.current) return;
@@ -877,6 +921,17 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     agentRunningRef.current = agentRunning;
   }, [agentRunning]);
 
+  const consumeQueuedMessage = useCallback((text: string) => {
+    if (!text) return;
+    setQueuedMessages((prev) => {
+      const si = prev.steering.indexOf(text);
+      if (si !== -1) return { ...prev, steering: prev.steering.filter((_, i) => i !== si) };
+      const fi = prev.followUp.indexOf(text);
+      if (fi !== -1) return { ...prev, followUp: prev.followUp.filter((_, i) => i !== fi) };
+      return prev;
+    });
+  }, []);
+
   const handleAgentEvent = useCallback((event: AgentEvent) => {
     switch (event.type) {
       case "agent_start":
@@ -886,6 +941,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         dispatch({ type: "start" });
         break;
       case "agent_end":
+        // isTerminal === false means an async delivery resumes this run soon.
+        if (event.isTerminal === false) break;
         // A late agent_end can arrive over SSE after reconcileAgentState
         // already finished this run — don't re-trigger completion.
         if (!agentRunningRef.current) break;
@@ -900,30 +957,48 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             .then((r) => r.json())
             .then((d: { state?: AgentStateResponse }) => {
               if (d.state?.contextUsage !== undefined) setContextUsage(d.state.contextUsage ?? null);
-              if (d.state?.systemPrompt !== undefined) setSystemPrompt(d.state.systemPrompt ?? null);
+              if (d.state?.systemPrompt !== undefined) setSystemPrompt(d.state.systemPrompt || null);
               if (d.state?.extensionStatuses !== undefined) setExtensionStatuses(d.state.extensionStatuses ?? []);
               if (d.state?.extensionWidgets !== undefined) setExtensionWidgets(d.state.extensionWidgets ?? []);
-              // Aborted turns can leave messages queued in pi (delivered with the
-              // next turn); dead wrapper (no state) means the queue is gone.
-              setQueuedMessages(normalizeQueuedMessages(d.state?.queuedMessages));
+              // omp reports only a queued count; an empty (or dead) session
+              // means the client-tracked queue texts are stale.
+              if (!d.state || d.state.queuedMessageCount === 0) setQueuedMessages(EMPTY_QUEUE);
             })
             .catch(() => {});
         }
         onAgentEnd?.();
         break;
-      case "prompt_done":
+      case "prompt_result":
+        // A prompt handled entirely by a builtin/extension slash command:
+        // no agent_start/agent_end pair will follow.
+        if (event.agentInvoked !== false) break;
         if (!agentRunningRef.current) break;
         void finishPromptWithoutStream(sessionIdRef.current);
         break;
       case "prompt_error":
         addNotice({ type: "error", message: (event.errorMessage as string | undefined) ?? "Command failed" });
         break;
-      case "extension_error":
+      case "notice": {
+        const level = event.level as string | undefined;
         addNotice({
-          type: "error",
-          message: (event.error as string | undefined) ?? "Extension command failed",
+          type: level === "error" ? "error" : level === "warning" ? "warning" : "info",
+          message: (event.message as string | undefined) ?? "",
         });
         break;
+      }
+      case "command_output": {
+        const text = event.text as string | undefined;
+        if (text?.trim()) addNotice({ type: "info", message: text });
+        break;
+      }
+      case "thinking_level_changed":
+        setThinkingLevel(normalizeThinkingLevel(event.thinkingLevel as string | undefined));
+        break;
+      case "available_commands_update": {
+        const commands = (event.commands as RpcAvailableSlashCommand[] | undefined) ?? [];
+        setSlashCommands(commands.map(toSlashCommandInfo).filter((c): c is SlashCommandInfo => c !== null));
+        break;
+      }
       case "message_start":
       case "message_update": {
         // Ignore streaming events arriving after this run already finished
@@ -955,6 +1030,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           const deliveredKey = userMessageKey(delivered);
           const optimisticKey = optimisticUserMessageKeyRef.current;
           optimisticUserMessageKeyRef.current = null;
+          // Delivered steering/follow-up texts leave the client-tracked queue.
+          consumeQueuedMessage(extractMessageText(delivered));
           setMessages((prev) => {
             const last = prev[prev.length - 1];
             if (optimisticKey && last?.role === "user" && userMessageKey(last) === optimisticKey) {
@@ -991,12 +1068,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         });
         break;
       }
-      case "queue_update":
-        setQueuedMessages({
-          steering: [...((event.steering as string[] | undefined) ?? [])],
-          followUp: [...((event.followUp as string[] | undefined) ?? [])],
-        });
-        break;
       case "auto_retry_start":
         setRetryInfo({ attempt: event.attempt as number, maxAttempts: event.maxAttempts as number, errorMessage: event.errorMessage as string | undefined });
         break;
@@ -1004,27 +1075,25 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         setRetryInfo(null);
         break;
       case "auto_compaction_start":
-      case "compaction_start":
         setIsCompacting(true);
         setCompactError(null);
         setCompactResult(null);
         break;
       case "auto_compaction_end":
-      case "compaction_end":
         setIsCompacting(false);
         if (event.errorMessage) {
           setCompactError(event.errorMessage as string);
           setCompactResult(null);
-        } else if (!event.aborted) {
-          setCompactResult(readCompactResult(event.result, (event.reason as string | undefined) ?? "auto"));
+        } else if (!event.aborted && !event.skipped) {
+          setCompactResult(readCompactResult(event.result, "auto"));
           if (sessionIdRef.current) loadSession(sessionIdRef.current);
         }
         break;
       case "extension_ui_request":
-        handleExtensionUiRequest(event as ExtensionUiRequest);
+        handleExtensionUiRequest(event as unknown as IncomingExtensionUiRequest);
         break;
     }
-  }, [addNotice, finishPromptWithoutStream, handleExtensionUiRequest, loadSession, onAgentEnd]);
+  }, [addNotice, consumeQueuedMessage, finishPromptWithoutStream, handleExtensionUiRequest, loadSession, onAgentEnd]);
   handleAgentEventRef.current = handleAgentEvent;
 
   const handleSend = useCallback(async (message: string, images?: AttachedImage[]) => {
@@ -1192,11 +1261,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, [onSessionForked]);
 
+  // omp's RPC protocol has no navigate-within-tree command, so branch
+  // selection is display-only: the viewed branch is loaded from the session
+  // file, while a live agent keeps prompting from its own current leaf.
   const handleNavigate = useCallback(async (entryId: string) => {
     if (bashRunningRef.current) return;
     const sid = sessionIdRef.current;
     if (!sid) return;
-    sendAgentCommand(sid, { type: "navigate_tree", targetId: entryId }).catch(() => {});
     setActiveLeafId(entryId);
     await loadContext(sid, entryId);
   }, [loadContext]);
@@ -1207,9 +1278,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     const sid = sessionIdRef.current;
     if (!sid) return;
     await loadContext(sid, leafId);
-    if (leafId) {
-      sendAgentCommand(sid, { type: "navigate_tree", targetId: leafId }).catch(() => {});
-    }
   }, [loadContext]);
 
   const handleModelChange = useCallback(async (provider: string, modelId: string) => {
@@ -1371,6 +1439,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         message,
         ...(piImages?.length ? { images: piImages } : {}),
       });
+      // omp emits no queue snapshots; track the queued text locally until it
+      // is delivered (user message_end) or the queue count drops to zero.
+      setQueuedMessages((prev) => ({ ...prev, steering: [...prev.steering, message] }));
     } catch (e) {
       console.error("Failed to steer:", e);
     }
@@ -1391,6 +1462,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         streamingBehavior: behavior,
         ...(piImages?.length ? { images: piImages } : {}),
       });
+      setQueuedMessages((prev) => behavior === "steer"
+        ? { ...prev, steering: [...prev.steering, message] }
+        : { ...prev, followUp: [...prev.followUp, message] });
     } catch (e) {
       console.error("Failed to queue prompt:", e);
     }
@@ -1406,6 +1480,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         message,
         ...(piImages?.length ? { images: piImages } : {}),
       });
+      setQueuedMessages((prev) => ({ ...prev, followUp: [...prev.followUp, message] }));
     } catch (e) {
       console.error("Failed to follow up:", e);
     }
@@ -1421,23 +1496,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, []);
 
-  const handleRecallQueue = useCallback(async () => {
-    const sid = sessionIdRef.current;
-    if (!sid) return;
-    try {
-      const result = await sendAgentCommand<{ steering?: string[]; followUp?: string[] }>(sid, { type: "clear_queue" });
-      // clearQueue also emits an empty queue_update, but that only reaches us
-      // while SSE is connected — clear locally so idle recalls update the UI.
-      setQueuedMessages({ steering: [], followUp: [] });
-      const texts = [...(result?.steering ?? []), ...(result?.followUp ?? [])];
-      if (texts.length > 0) {
-        opts.chatInputRef?.current?.prependText(texts.join("\n\n"));
-      }
-    } catch (e) {
-      console.error("Failed to recall queued messages:", e);
-      addNotice({ type: "error", message: "Failed to recall queued messages" });
-    }
-  }, [opts.chatInputRef, addNotice]);
+  // omp's RPC protocol has no clear_queue command, so queued messages cannot
+  // be recalled into the editor. Exported as undefined so ChatInput hides the
+  // recall button entirely.
+  const handleRecallQueue: (() => void) | undefined = undefined;
 
   const handleThinkingLevelChange = useCallback(async (level: ThinkingLevelOption) => {
     setThinkingLevel(level);
@@ -1452,16 +1514,14 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   }, []);
 
   const handleToolPresetChange = useCallback(async (preset: "none" | "default" | "full") => {
-    const toolNames = getToolNamesForPreset(preset);
     setToolPresetState(preset);
+    // The preset is applied at spawn time (--tools/--no-tools flags); omp's
+    // RPC protocol cannot change the toolset of an already-running session.
     const sid = sessionIdRef.current ?? await ensuringNewSessionRef.current;
-    if (!sid) return;
-    try {
-      await sendAgentCommand(sid, { type: "set_tools", toolNames });
-    } catch (e) {
-      console.error("Failed to set tools:", e);
+    if (sid) {
+      addNotice({ type: "info", message: "Tool presets apply when a session starts; this session keeps its current tools." });
     }
-  }, [setToolPresetState]);
+  }, [setToolPresetState, addNotice]);
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
     ignoreProgrammaticScrollUntilRef.current = Date.now() + PROGRAMMATIC_SCROLL_IGNORE_MS;
@@ -1518,11 +1578,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         if (agentState?.state) {
           if (agentState.state.isCompacting !== undefined) setIsCompacting(agentState.state.isCompacting);
           if (agentState.state.contextUsage !== undefined) setContextUsage(agentState.state.contextUsage ?? null);
-          if (agentState.state.systemPrompt !== undefined) setSystemPrompt(agentState.state.systemPrompt ?? null);
-          if (agentState.state.thinkingLevel !== undefined) setThinkingLevel((agentState.state.thinkingLevel as ThinkingLevelOption) ?? "auto");
+          if (agentState.state.systemPrompt !== undefined) setSystemPrompt(agentState.state.systemPrompt || null);
+          if (agentState.state.thinkingLevel !== undefined) setThinkingLevel(normalizeThinkingLevel(agentState.state.thinkingLevel));
           if (agentState.state.extensionStatuses !== undefined) setExtensionStatuses(agentState.state.extensionStatuses ?? []);
           if (agentState.state.extensionWidgets !== undefined) setExtensionWidgets(agentState.state.extensionWidgets ?? []);
-          if (agentState.state.queuedMessages !== undefined) setQueuedMessages(normalizeQueuedMessages(agentState.state.queuedMessages));
+          if (agentState.state.queuedMessageCount === 0) setQueuedMessages(EMPTY_QUEUE);
         }
       });
     }

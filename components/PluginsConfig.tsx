@@ -36,8 +36,8 @@ function versionSummary(pkg: PluginPackageInfo): string {
 
 function installLocation(scope: PluginScope, cwd: string): string {
   return scope === "project"
-    ? `${shortenPath(cwd)}/.pi/agent/{npm,git}`
-    : "~/.pi/agent/{npm,git}";
+    ? `${shortenPath(cwd)}/.omp`
+    : "~/.omp/plugins";
 }
 
 function findInstalledPackage(

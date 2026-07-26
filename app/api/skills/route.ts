@@ -1,14 +1,14 @@
 import { NextResponse } from "next/server";
 import { existsSync, readFileSync, writeFileSync } from "fs";
-import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import { loadSkillsWithInstallInfo } from "@/lib/skills-service";
+import { getAgentDir } from "@/lib/omp/paths";
+import { loadSkillsWithInstallInfo, parseSkillFrontmatter } from "@/lib/skills-service";
 import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
 
 export const dynamic = "force-dynamic";
 
 // GET /api/skills?cwd=<path>
-// Uses DefaultResourceLoader (same logic as AgentSession startup) so settings.json
-// skill paths, package skills, and .agents/skills directories are all included.
+// Scans the same skill roots omp discovers (~/.omp/agent/skills, project
+// .omp/skills, and the .claude/.agents/.codex/.github compat directories).
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const cwd = searchParams.get("cwd");
@@ -41,9 +41,9 @@ export async function PATCH(req: Request) {
     const content = readFileSync(filePath, "utf8");
     const key = "disable-model-invocation";
 
-    // Use parseFrontmatter to check current value, then do a surgical line edit
-    // to preserve the original YAML formatting of all other fields.
-    const { frontmatter } = parseFrontmatter<Record<string, unknown>>(content);
+    // Parse the frontmatter to check the current value, then do a surgical line
+    // edit to preserve the original YAML formatting of all other fields.
+    const { frontmatter } = parseSkillFrontmatter(content);
     const alreadySet = Boolean(frontmatter[key]);
 
     let updated = content;

@@ -1,7 +1,14 @@
 import { NextResponse } from "next/server";
-import { readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "fs";
+import { readFileSync, readdirSync, statSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import {
+  buildSessionTree,
+  deleteSessionFileWithArtifacts,
+  getLeafEntryId,
+  loadSessionFile,
+  parseTitleSlotLine,
+  setSessionTitle,
+} from "@/lib/omp/session-files";
 import {
   resolveSessionPath,
   resolveSessionIdByPath,
@@ -124,26 +131,31 @@ export async function GET(
       return NextResponse.json({ error: "Session not found" }, { status: 404 });
     }
 
-    const sm = SessionManager.open(filePath);
-    const entries = sm.getEntries() as never;
-    const leafId = sm.getLeafId();
-    const tree = projectTreeForResponse(sm.getTree());
     const searchParams = new URL(req.url).searchParams;
     const deferThinking = searchParams.has("deferThinking");
     const deferToolResultImages = searchParams.has("deferMedia");
+
+    const { header, entries } = loadSessionFile(filePath, {
+      resolveBlobs: true,
+      skipToolResultImages: deferToolResultImages,
+    });
+    if (!header) {
+      return NextResponse.json({ error: "Session file is missing or malformed" }, { status: 404 });
+    }
+    const leafId = getLeafEntryId(entries);
+    const tree = projectTreeForResponse(buildSessionTree(entries));
     const context = buildSessionContext(entries, leafId, { deferThinking, deferToolResultImages });
 
-    const header = sm.getHeader();
-    let modified = header?.timestamp ?? new Date().toISOString();
+    let modified = header.timestamp ?? new Date().toISOString();
     try { modified = statSync(filePath).mtime.toISOString(); } catch { /* use header timestamp */ }
-    const parentSessionId = header?.parentSession
+    const parentSessionId = header.parentSession
       ? await resolveSessionIdByPath(header.parentSession)
       : undefined;
-    const info = header ? {
+    const info = {
       path: filePath,
       id: header.id,
       cwd: header.cwd ?? "",
-      name: sm.getSessionName(),
+      name: header.title,
       created: header.timestamp,
       modified,
       messageCount: context.messages.length,
@@ -155,7 +167,7 @@ export async function GET(
           })()
         : "(no messages)",
       parentSessionId,
-    } : null;
+    };
 
     return NextResponse.json({
       sessionId: id,
@@ -178,15 +190,29 @@ export async function PATCH(
   const { id } = await params;
   try {
     const { name } = await req.json() as { name?: string };
-    if (typeof name !== "string") {
+    if (typeof name !== "string" || !name.trim()) {
       return NextResponse.json({ error: "name is required" }, { status: 400 });
     }
     const filePath = await resolveSessionPath(id);
     if (!filePath) {
       return NextResponse.json({ error: "Session not found" }, { status: 404 });
     }
-    const sm = SessionManager.open(filePath);
-    sm.appendSessionInfo(name.trim());
+
+    // A running omp process owns its session file; route the rename through it
+    // so the in-memory title cannot clobber ours on the next flush.
+    let renamed = false;
+    const rpc = getRpcSession(id);
+    if (rpc?.isAlive?.() && typeof rpc.send === "function") {
+      try {
+        await rpc.send({ type: "set_session_name", name: name.trim() });
+        renamed = true;
+      } catch {
+        // Fall back to the on-disk title slot below.
+      }
+    }
+    if (!renamed) {
+      setSessionTitle(filePath, name.trim(), "user");
+    }
     invalidateSessionListCache();
     return NextResponse.json({ ok: true });
   } catch (error) {
@@ -222,7 +248,10 @@ export async function DELETE(
         try {
           const content = readFileSync(childPath, "utf8");
           const lines = content.split("\n");
-          const header = JSON.parse(lines[0]) as { type?: string; parentSession?: string };
+          // v3 files carry a fixed-width title slot on line 1; the session
+          // header is then line 2. The slot line is left byte-identical.
+          const headerIndex = parseTitleSlotLine(lines[0] ?? "") ? 1 : 0;
+          const header = JSON.parse(lines[headerIndex]) as { type?: string; parentSession?: string };
           if (
             header.type === "session" &&
             header.parentSession &&
@@ -230,15 +259,17 @@ export async function DELETE(
           ) {
             // Rewrite header with new parentSession
             header.parentSession = parentSessionPath;
-            lines[0] = JSON.stringify(header);
+            lines[headerIndex] = JSON.stringify(header);
             writeFileSync(childPath, lines.join("\n"));
           }
         } catch { /* skip malformed */ }
       }
     } catch { /* skip if dir unreadable */ }
 
-    getRpcSession(id)?.destroy();
-    unlinkSync(filePath);
+    // Await the child's exit before unlinking: omp flushes session state on
+    // shutdown and would recreate the file if it were still running.
+    await getRpcSession(id)?.destroyAndWait?.();
+    deleteSessionFileWithArtifacts(filePath);
     invalidateSessionPathCache(id);
     invalidateSessionListCache();
     return NextResponse.json({ ok: true });

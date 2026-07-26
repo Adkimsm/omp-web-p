@@ -20,7 +20,10 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: "Access denied" }, { status: 403 });
       }
     }
-    const args = ["skills", "add", pkg.trim(), "-y", "--agent", "pi"];
+    // The skills.sh CLI has no omp agent entry; "universal" installs into the
+    // ecosystem-standard ~/.agents/skills (global) / <cwd>/.agents/skills
+    // (project), both of which omp discovers via its agent-dirs provider.
+    const args = ["skills", "add", pkg.trim(), "-y", "--agent", "universal"];
     if (isGlobal) args.push("-g");
 
     console.log(`[skills/install] running: npx ${args.join(" ")}`);

@@ -87,7 +87,7 @@ function compareModelOptions(a: ModelOption, b: ModelOption): number {
 
 const THINKING_LEVELS = ["auto", "off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 const THINKING_LEVEL_DESC: Record<typeof THINKING_LEVELS[number], string> = {
-  auto: "Use pi default",
+  auto: "Use omp default",
   off: "Reasoning off",
   minimal: "Minimal reasoning",
   low: "Low reasoning",

@@ -1,13 +1,20 @@
-import {
-  SessionManager,
-  buildContextEntries as piBuildContextEntries,
-  buildSessionContext as piBuildSessionContext,
-  getAgentDir,
-} from "@earendil-works/pi-coding-agent";
-import { closeSync, openSync, readSync } from "fs";
 import { normalize as normalizePath } from "path";
-import type { AgentMessage, SessionEntry, SessionHeader, SessionInfo, SessionContext } from "./types";
-import type { SessionEntry as PiSessionEntry, SessionInfo as PiSessionInfo } from "@earendil-works/pi-coding-agent";
+import { getAgentDir } from "./omp/paths";
+import {
+  listAllSessionInfos,
+  loadSessionFile,
+  readSessionHeaderSync,
+  type OmpSessionInfo,
+} from "./omp/session-files";
+import type {
+  AgentMessage,
+  CompactionEntry,
+  CustomMessage,
+  SessionContext,
+  SessionEntry,
+  SessionHeader,
+  SessionInfo,
+} from "./types";
 import { normalizeToolCalls } from "./normalize";
 import { sessionPathKey } from "./session-path";
 import { resolveProject, type ProjectInfo } from "./worktree";
@@ -15,28 +22,31 @@ import { resolveProject, type ProjectInfo } from "./worktree";
 export { getAgentDir };
 
 async function loadAllSessions(): Promise<SessionInfo[]> {
-  const piSessions: PiSessionInfo[] = await SessionManager.listAll();
+  const ompSessions: OmpSessionInfo[] = await listAllSessionInfos();
   const pathToId = new Map<string, string>();
-  for (const s of piSessions) pathToId.set(sessionPathKey(s.path), s.id);
+  for (const s of ompSessions) pathToId.set(sessionPathKey(s.path), s.id);
 
   // Resolve each unique cwd to its project root (main repo shared by all
   // worktrees). resolveProject caches per-cwd, so this is cheap after warmup.
-  const uniqueCwds = [...new Set(piSessions.map((s) => s.cwd).filter(Boolean))];
+  const uniqueCwds = [...new Set(ompSessions.map((s) => s.cwd).filter(Boolean))];
   const projectByCwd = new Map<string, ProjectInfo>();
   await Promise.all(uniqueCwds.map(async (cwd) => {
     projectByCwd.set(cwd, await resolveProject(cwd));
   }));
 
-  return piSessions.map((s) => {
+  return ompSessions.map((s) => {
     cacheSessionPath(s.id, s.path);
     const project = s.cwd ? projectByCwd.get(s.cwd) : undefined;
     return {
       path: s.path,
       id: s.id,
       cwd: s.cwd,
-      name: s.name,
-      created: s.created instanceof Date ? s.created.toISOString() : String(s.created),
-      modified: s.modified instanceof Date ? s.modified.toISOString() : String(s.modified),
+      // omp renamed the display field to `title`; the internal shape keeps `name`.
+      name: s.title,
+      created: s.created instanceof Date && !Number.isNaN(s.created.getTime())
+        ? s.created.toISOString()
+        : s.modified.toISOString(),
+      modified: s.modified.toISOString(),
       messageCount: s.messageCount,
       firstMessage: s.firstMessage || "(no messages)",
       parentSessionId: s.parentSessionPath ? pathToId.get(sessionPathKey(s.parentSessionPath)) : undefined,
@@ -163,80 +173,128 @@ export function invalidateSessionPathCache(sessionId: string): void {
   }
 }
 
+/** Bounded, title-slot-aware header read (never loads message bodies). */
 export function readSessionHeader(filePath: string): SessionHeader | null {
-  const fd = openSync(filePath, "r");
-  try {
-    const chunks: Buffer[] = [];
-    const maxHeaderBytes = 64 * 1024;
-    let position = 0;
-    let foundNewline = false;
-
-    while (position < maxHeaderBytes && !foundNewline) {
-      const buffer = Buffer.allocUnsafe(Math.min(4096, maxHeaderBytes - position));
-      const bytesRead = readSync(fd, buffer, 0, buffer.length, position);
-      if (bytesRead === 0) break;
-      const data = buffer.subarray(0, bytesRead);
-      const newlineIndex = data.indexOf(0x0a);
-      chunks.push(newlineIndex === -1 ? data : data.subarray(0, newlineIndex));
-      position += bytesRead;
-      foundNewline = newlineIndex !== -1;
-    }
-
-    if (!foundNewline && position >= maxHeaderBytes) return null;
-    const firstLine = Buffer.concat(chunks).toString("utf8").trimEnd();
-    if (!firstLine) return null;
-    try {
-      const header = JSON.parse(firstLine) as SessionHeader;
-      return header.type === "session" ? header : null;
-    } catch {
-      return null;
-    }
-  } finally {
-    closeSync(fd);
-  }
+  return readSessionHeaderSync(filePath);
 }
 
+/** Session entries without blob resolution (fine for reference/thinking scans). */
 export function getSessionEntries(filePath: string): SessionEntry[] {
-  const entries = SessionManager.open(filePath).getEntries();
-  return entries as unknown as SessionEntry[];
+  return loadSessionFile(filePath).entries;
 }
 
+const SUPERSEDED_COMPACTION_SUMMARY = "[Superseded compaction summary elided after a newer compaction]";
+
+/**
+ * Build the display context for a leaf. Port of oh-my-pi's buildSessionContext
+ * (session/session-context.ts) path-walk semantics — leaf→root walk with a
+ * cycle guard, firstKeptEntryId compaction collapsing, role-based model
+ * tracking with legacy assistant-message inference — combined with pi-web's
+ * UI message conversion: messages/entryIds stay parallel so fork/navigation
+ * targets remain aligned, and the active compaction summary is emitted first
+ * (the collapsed view the pi-web UI is built around).
+ */
 export function buildSessionContext(
   entries: SessionEntry[],
   leafId?: string | null,
   options: { deferThinking?: boolean; deferToolResultImages?: boolean } = {},
 ): SessionContext {
+  const emptyContext: SessionContext = { messages: [], entryIds: [], thinkingLevel: "off", model: null };
   const byId = new Map<string, SessionEntry>();
   for (const e of entries) byId.set(e.id, e);
 
-  const piEntries = entries as unknown as PiSessionEntry[];
-  const piCtx = piBuildSessionContext(piEntries, leafId, byId as unknown as Map<string, PiSessionEntry>);
+  // Explicitly null — navigated to before the first entry.
+  if (leafId === null) return emptyContext;
 
-  const contextEntries = piBuildContextEntries(
-    piEntries,
-    leafId,
-    byId as unknown as Map<string, PiSessionEntry>,
-  );
+  let leaf: SessionEntry | undefined;
+  if (leafId) leaf = byId.get(leafId);
+  if (!leaf) leaf = entries[entries.length - 1];
+  if (!leaf) return emptyContext;
 
-  // Convert the SDK-selected context entries and their IDs together. This keeps
-  // fork/navigation targets aligned while preserving pi's compaction ordering.
-  const messages: AgentMessage[] = [];
-  const entryIds: string[] = [];
-  for (const entry of contextEntries) {
-    const localEntry = entry as unknown as SessionEntry;
-    const m = entryToUiMessage(localEntry, options);
-    if (m) {
-      messages.push(m);
-      entryIds.push(localEntry.id);
+  // Walk leaf → root. Corrupt files can contain parent cycles; stop at the
+  // first repeat so the walk stays bounded.
+  const path: SessionEntry[] = [];
+  const seen = new Set<string>();
+  let current: SessionEntry | undefined = leaf;
+  while (current && !seen.has(current.id)) {
+    seen.add(current.id);
+    path.push(current);
+    current = current.parentId ? byId.get(current.parentId) : undefined;
+  }
+  path.reverse();
+
+  // Settings scan along the path: thinking level, model roles, last compaction.
+  let thinkingLevel = "off";
+  const models: Record<string, string> = {};
+  // Once an explicit default model_change is on the path, assistant-message
+  // inference must not overwrite it (temporary fallbacks carry the wrong id).
+  let hasExplicitDefaultModel = false;
+  let compaction: CompactionEntry | null = null;
+  for (const entry of path) {
+    if (entry.type === "thinking_level_change") {
+      thinkingLevel = entry.thinkingLevel ?? "off";
+    } else if (entry.type === "model_change") {
+      if (entry.model) {
+        const role = entry.role ?? "default";
+        models[role] = entry.model;
+        if (role === "default") hasExplicitDefaultModel = true;
+      } else if (entry.provider && entry.modelId) {
+        // Legacy pi entry shape.
+        models.default = `${entry.provider}/${entry.modelId}`;
+        hasExplicitDefaultModel = true;
+      }
+    } else if (entry.type === "message" && entry.message.role === "assistant") {
+      if (!hasExplicitDefaultModel && entry.message.provider && entry.message.model) {
+        models.default = `${entry.message.provider}/${entry.message.model}`;
+      }
+    } else if (entry.type === "compaction") {
+      compaction = entry;
     }
   }
 
-  return {
-    messages,
-    entryIds,
-    thinkingLevel: piCtx.thinkingLevel,
-    model: piCtx.model,
+  const messages: AgentMessage[] = [];
+  const entryIds: string[] = [];
+  const appendEntry = (entry: SessionEntry) => {
+    const message = entry.type === "compaction"
+      ? compactionUiMessage(entry, entry.id === compaction?.id)
+      : entryToUiMessage(entry, options);
+    if (message) {
+      messages.push(message);
+      entryIds.push(entry.id);
+    }
   };
+
+  if (compaction) {
+    const activeCompaction = compaction;
+    // Collapsed view: active summary first, then entries kept from
+    // firstKeptEntryId up to the compaction, then everything after it.
+    appendEntry(activeCompaction);
+    const compactionIdx = path.findIndex((e) => e.type === "compaction" && e.id === activeCompaction.id);
+    let foundFirstKept = false;
+    for (let i = 0; i < compactionIdx; i++) {
+      const entry = path[i];
+      if (entry.id === activeCompaction.firstKeptEntryId) foundFirstKept = true;
+      if (foundFirstKept) appendEntry(entry);
+    }
+    for (let i = compactionIdx + 1; i < path.length; i++) {
+      appendEntry(path[i]);
+    }
+  } else {
+    for (const entry of path) appendEntry(entry);
+  }
+
+  // Effective model: the "default" role, as "provider/modelId" (modelId may
+  // itself contain slashes, e.g. openrouter ids).
+  let model: SessionContext["model"] = null;
+  const defaultModel = models.default;
+  if (defaultModel) {
+    const separator = defaultModel.indexOf("/");
+    model = separator > 0
+      ? { provider: defaultModel.slice(0, separator), modelId: defaultModel.slice(separator + 1) }
+      : { provider: "", modelId: defaultModel };
+  }
+
+  return { messages, entryIds, thinkingLevel, model };
 }
 
 function parseEntryTimestamp(timestamp: string): number | undefined {
@@ -290,22 +348,65 @@ function omitToolResultBase64Images(message: AgentMessage): AgentMessage {
   return { ...message, content };
 }
 
+function compactionUiMessage(entry: CompactionEntry, active: boolean): CustomMessage {
+  return {
+    role: "custom",
+    customType: "compaction",
+    content: active ? entry.summary : SUPERSEDED_COMPACTION_SUMMARY,
+    display: true,
+    details: {
+      tokensBefore: entry.tokensBefore,
+      firstKeptEntryId: entry.firstKeptEntryId,
+    },
+    timestamp: parseEntryTimestamp(entry.timestamp),
+  };
+}
+
 // Convert a session entry on the active branch into a UI message.
 // Returns null for entries that do not map to chat history (metadata, non-message types).
 function entryToUiMessage(
   entry: SessionEntry,
   options: { deferThinking?: boolean; deferToolResultImages?: boolean },
 ): AgentMessage | null {
-  // Supported message roles: user, assistant, toolResult, bashExecution.
-  // bashExecution messages enter the case "message" branch (entry.type === "message").
-  // The early return at line below ("!options.deferThinking || message.role !== "assistant"")
-  // passes non-assistant messages — including bashExecution — through unchanged.
-  // normalizeToolCalls is a secondary guard (returns non-assistant messages as-is).
   switch (entry.type) {
     case "message": {
+      const raw = entry.message;
+      // omp-only roles are folded into displayable custom messages so the
+      // existing role-keyed UI renders them without new components.
+      if (raw.role === "developer") {
+        return {
+          role: "custom",
+          customType: "developer",
+          content: raw.content,
+          display: true,
+          timestamp: raw.timestamp,
+        };
+      }
+      if (raw.role === "pythonExecution") {
+        const output = raw.output ? `\n\`\`\`\n${raw.output}\n\`\`\`` : "\n(no output)";
+        const status = raw.cancelled
+          ? "\n(execution cancelled)"
+          : raw.exitCode ? `\nExecution failed with code ${raw.exitCode}` : "";
+        return {
+          role: "custom",
+          customType: "python-execution",
+          content: `Ran Python:\n\`\`\`python\n${raw.code}\n\`\`\`${output}${status}`,
+          display: true,
+          timestamp: raw.timestamp,
+        };
+      }
+      if (raw.role === "fileMention") {
+        return {
+          role: "custom",
+          customType: "file-mention",
+          content: `Attached file${raw.files.length === 1 ? "" : "s"}:\n${raw.files.map((f) => `- ${f.path}`).join("\n")}`,
+          display: true,
+          timestamp: raw.timestamp,
+        };
+      }
       const message = options.deferToolResultImages
-        ? omitToolResultBase64Images(normalizeToolCalls(entry.message))
-        : normalizeToolCalls(entry.message);
+        ? omitToolResultBase64Images(normalizeToolCalls(raw))
+        : normalizeToolCalls(raw);
       if (!options.deferThinking || message.role !== "assistant") return message;
       return {
         ...message,
@@ -316,18 +417,6 @@ function entryToUiMessage(
         )),
       };
     }
-    case "compaction":
-      return {
-        role: "custom",
-        customType: "compaction",
-        content: entry.summary,
-        display: true,
-        details: {
-          tokensBefore: entry.tokensBefore,
-          firstKeptEntryId: entry.firstKeptEntryId,
-        },
-        timestamp: parseEntryTimestamp(entry.timestamp),
-      };
     case "branch_summary":
       if (!entry.summary) return null;
       return {
@@ -345,6 +434,9 @@ function entryToUiMessage(
         timestamp: parseEntryTimestamp(entry.timestamp),
       };
     default:
+      // model_change, thinking_level_change, service_tier_change, label,
+      // title_change, session_init, ttsr_injection, mode_change, custom,
+      // session_info: metadata entries with no chat rendering.
       return null;
   }
 }

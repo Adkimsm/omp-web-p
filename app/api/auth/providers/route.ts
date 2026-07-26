@@ -1,33 +1,27 @@
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { type OmpLoginProvider, runUtilityCommand } from "@/lib/omp/rpc-utility";
 
 export const dynamic = "force-dynamic";
 
+// Login-capable providers via the omp RPC get_login_providers command. This is
+// omp's own /login list (OAuth subscriptions plus key-creation flows), so no
+// hardcoded exclusions or display-name overrides are needed anymore.
 export async function GET() {
-  const modelRuntime = await ModelRuntime.create();
-  const credentials = await modelRuntime.listCredentials();
-  const loggedInProviders = new Set(
-    credentials.filter((credential) => credential.type === "oauth").map((credential) => credential.providerId),
-  );
-  const providers = modelRuntime.getProviders().filter((provider) => provider.auth.oauth);
-
-  const EXCLUDED = new Set(["anthropic"]);
-  const DISPLAY_NAMES: Record<string, string> = {
-    "openai-codex": "ChatGPT Plus/Pro",
-    "github-copilot": "GitHub Copilot",
-  };
-
-  const result = await Promise.all(
-    providers
-      .filter((p) => !EXCLUDED.has(p.id))
-      .map(async (p) => {
-        return {
-          id: p.id,
-          name: DISPLAY_NAMES[p.id] ?? p.name,
-          usesCallbackServer: false,
-          loggedIn: loggedInProviders.has(p.id),
-        };
-      })
-  );
-
-  return Response.json({ providers: result });
+  try {
+    const { providers } = await runUtilityCommand<{ providers: OmpLoginProvider[] }>(
+      { type: "get_login_providers" },
+      30_000,
+    );
+    const result = providers
+      .filter((p) => p.available !== false)
+      .map((p) => ({
+        id: p.id,
+        name: p.name,
+        usesCallbackServer: false,
+        loggedIn: p.authenticated,
+      }));
+    return Response.json({ providers: result });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return Response.json({ providers: [], error: message }, { status: 500 });
+  }
 }

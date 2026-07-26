@@ -5,9 +5,12 @@ import { allowFileRoot } from "@/lib/file-access";
 import { invalidateSessionListCache } from "@/lib/session-reader";
 import { startRpcSession } from "@/lib/rpc-manager";
 // POST /api/agent/new  body: { cwd: string; type: string; message?: string; ... }
-// Spawns a brand-new pi session. Most calls immediately send the first command;
+// Spawns a brand-new omp session. Most calls immediately send the first command;
 // type:"ensure_session" only creates the runtime so clients can query commands.
-// Returns { sessionId, data } where sessionId is pi's real session id.
+// Returns { sessionId, data } where sessionId is omp's real session id.
+// Model/thinking presets are applied post-ready via RPC set_model /
+// set_thinking_level (not CLI flags) so failures surface as command errors and
+// the live model catalog (incl. background discovery) is consulted.
 export async function POST(req: Request) {
   try {
     const body = await req.json() as { cwd?: string; [key: string]: unknown };

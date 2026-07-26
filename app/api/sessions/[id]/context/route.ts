@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { loadSessionFile } from "@/lib/omp/session-files";
 import { resolveSessionPath, buildSessionContext } from "@/lib/session-reader";
 
 export async function GET(
@@ -18,8 +18,14 @@ export async function GET(
       return NextResponse.json({ error: "Session not found" }, { status: 404 });
     }
 
-    const sm = SessionManager.open(filePath);
-    const context = buildSessionContext(sm.getEntries() as never, leafId, {
+    const { header, entries } = loadSessionFile(filePath, {
+      resolveBlobs: true,
+      skipToolResultImages: deferToolResultImages,
+    });
+    if (!header) {
+      return NextResponse.json({ error: "Session file is missing or malformed" }, { status: 404 });
+    }
+    const context = buildSessionContext(entries, leafId, {
       deferThinking,
       deferToolResultImages,
     });

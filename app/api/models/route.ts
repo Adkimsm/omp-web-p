@@ -1,11 +1,12 @@
-import { stat } from "fs/promises";
-import { resolve } from "path";
-import { createAgentSessionServices, getAgentDir, type SettingsManager } from "@earendil-works/pi-coding-agent";
-import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { loadModelsWithCache, withModelRuntimeError, type ModelsData } from "@/lib/models-cache";
-import { getAllowedFileRoots, isExistingFilePathAllowed } from "@/lib/file-access";
+import { type OmpModel, runUtilityCommand } from "@/lib/omp/rpc-utility";
 
 export const dynamic = "force-dynamic";
+
+// The omp model registry (auth + models.yml) is global, not per-cwd, so one
+// cache entry serves every request. The ?cwd= query parameter is still
+// accepted for client compatibility but no longer affects the result.
+const MODELS_CACHE_KEY = "global";
 
 const modelNameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
@@ -18,62 +19,50 @@ function compareModelEntries(
     || modelNameCollator.compare(a.id, b.id);
 }
 
-const THINKING_SUFFIXES = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
-
-function stripThinkingSuffix(modelRef: string): string {
-  const trimmed = modelRef.trim();
-  const colonIndex = trimmed.lastIndexOf(":");
-  if (colonIndex === -1) return trimmed;
-  const suffix = trimmed.substring(colonIndex + 1);
-  return THINKING_SUFFIXES.has(suffix) ? trimmed.substring(0, colonIndex) : trimmed;
+// "off" is always a valid selector; the concrete efforts come from the model's
+// baked thinking metadata (omp: getSupportedEfforts = reasoning ? efforts : []).
+function thinkingLevelsFor(model: OmpModel): string[] {
+  if (!model.reasoning) return ["off"];
+  return ["off", ...(model.thinking?.efforts ?? [])];
 }
 
-function filterByExactEnabledModels<T extends { id: string; provider: string }>(
-  available: readonly T[],
-  enabledModels: string[] | undefined,
-): readonly T[] {
-  if (!enabledModels || enabledModels.length === 0) return available;
+async function loadModels(): Promise<ModelsData> {
+  const { models: available } = await runUtilityCommand<{ models: OmpModel[] }>(
+    { type: "get_available_models" },
+    120_000,
+  );
 
-  const refs = new Set(enabledModels.map(stripThinkingSuffix).filter(Boolean));
-  const visible = available.filter((m) => refs.has(`${m.provider}/${m.id}`) || refs.has(m.id));
-  return visible.length > 0 ? visible : available;
-}
-
-async function loadModels(cwd: string): Promise<ModelsData> {
   const nameMap = new Map<string, string>();
-  let modelList: { id: string; name: string; provider: string }[] = [];
-  let defaultModel: { provider: string; modelId: string } | null = null;
   const thinkingLevels: Record<string, string[]> = {};
-  const thinkingLevelMaps: Record<string, Record<string, string | null>> = {};
-
-  const agentDir = getAgentDir();
-  const services = await createAgentSessionServices({ cwd, agentDir });
-  const available = await services.modelRuntime.getAvailable();
-  const modelError = services.modelRuntime.getError();
-  const settings: SettingsManager = services.settingsManager;
-  const enabledModels = settings.getEnabledModels();
-  const visible = filterByExactEnabledModels(available, enabledModels);
-  modelList = visible.map((m: { id: string; name: string; provider: string }) => ({
-    id: m.id,
-    name: m.name,
-    provider: m.provider,
-  })).sort(compareModelEntries);
-  for (const m of visible) {
+  const modelList = available
+    .map((m) => ({ id: m.id, name: m.name, provider: m.provider }))
+    .sort(compareModelEntries);
+  for (const m of available) {
     const key = `${m.provider}:${m.id}`;
     nameMap.set(key, m.name);
-    thinkingLevels[key] = getSupportedThinkingLevels(m);
-    if (m.thinkingLevelMap) thinkingLevelMaps[key] = m.thinkingLevelMap;
+    thinkingLevels[key] = thinkingLevelsFor(m);
   }
 
-  const provider = settings.getDefaultProvider();
-  const modelId = settings.getDefaultModel();
-  if (provider && modelId && visible.some((m) => m.provider === provider && m.id === modelId)) {
-    defaultModel = { provider, modelId };
+  // omp resolves the default model at session start; a --no-session utility
+  // process reports it via get_state.
+  let defaultModel: { provider: string; modelId: string } | null = null;
+  try {
+    const state = await runUtilityCommand<{ model?: { provider?: string; id?: string } }>(
+      { type: "get_state" },
+      30_000,
+    );
+    const provider = state.model?.provider;
+    const modelId = state.model?.id;
+    if (provider && modelId && available.some((m) => m.provider === provider && m.id === modelId)) {
+      defaultModel = { provider, modelId };
+    }
+  } catch {
+    // Default model is cosmetic — the models list is still useful without it.
   }
 
   return withModelRuntimeError(
-    { models: Object.fromEntries(nameMap), modelList, defaultModel, thinkingLevels, thinkingLevelMaps },
-    modelError,
+    { models: Object.fromEntries(nameMap), modelList, defaultModel, thinkingLevels, thinkingLevelMaps: {} },
+    undefined,
   );
 }
 
@@ -85,27 +74,11 @@ const EMPTY_MODELS: ModelsData = {
   thinkingLevelMaps: {},
 };
 
-export async function GET(req: Request) {
-  const requestedCwd = new URL(req.url).searchParams.get("cwd") || process.cwd();
-  const cwd = resolve(requestedCwd);
-
-  let cwdStat;
+export async function GET() {
   try {
-    cwdStat = await stat(cwd);
-  } catch {
-    return Response.json({ error: `Directory does not exist: ${cwd}` }, { status: 400 });
-  }
-  if (!cwdStat.isDirectory()) {
-    return Response.json({ error: `Not a directory: ${cwd}` }, { status: 400 });
-  }
-  const allowedRoots = await getAllowedFileRoots();
-  if (!isExistingFilePathAllowed(cwd, allowedRoots)) {
-    return Response.json({ error: "Access denied" }, { status: 403 });
-  }
-
-  try {
-    return Response.json(await loadModelsWithCache(cwd, () => loadModels(cwd)));
-  } catch {
-    return Response.json(EMPTY_MODELS);
+    return Response.json(await loadModelsWithCache(MODELS_CACHE_KEY, () => loadModels()));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return Response.json(withModelRuntimeError(EMPTY_MODELS, message));
   }
 }
