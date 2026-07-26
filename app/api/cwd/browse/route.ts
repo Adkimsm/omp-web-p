@@ -17,13 +17,13 @@ export async function GET(request: NextRequest) {
     try {
       resolved = await resolveDirectory(candidate);
     } catch {
-      return NextResponse.json({ error: "Directory does not exist" }, { status: 404 });
+      return NextResponse.json({ error: "Directory does not exist", code: "directory_not_found" }, { status: 404 });
     }
 
 
     const directoryStat = await stat(resolved);
     if (!directoryStat.isDirectory()) {
-      return NextResponse.json({ error: "Path is not a directory" }, { status: 400 });
+      return NextResponse.json({ error: "Path is not a directory", code: "not_a_directory" }, { status: 400 });
     }
 
     const directories = await listDirectories(resolved);

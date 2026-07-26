@@ -14,6 +14,7 @@ import {
 } from "@/lib/file-fuzzy";
 import { FolderIcon, getFileIcon } from "./FileIcons";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { useI18n } from "@/lib/i18n";
 
 export interface AttachedImage {
   data: string;   // base64, no prefix
@@ -77,30 +78,29 @@ export interface ChatInputHandle {
 const TOOL_PRESETS = ["off", "default", "full"] as const;
 const TOOL_PRESET_MAP: Record<"off" | "default" | "full", "none" | "default" | "full"> = { off: "none", default: "default", full: "full" };
 const COMPOSITION_END_ENTER_GRACE_MS = 100;
-const MODEL_OPTION_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
-function compareModelOptions(a: ModelOption, b: ModelOption): number {
-  return MODEL_OPTION_COLLATOR.compare(a.name || a.modelId, b.name || b.modelId)
-    || MODEL_OPTION_COLLATOR.compare(a.provider, b.provider)
-    || MODEL_OPTION_COLLATOR.compare(a.modelId, b.modelId);
+function compareModelOptions(collator: Intl.Collator, a: ModelOption, b: ModelOption): number {
+  return collator.compare(a.name || a.modelId, b.name || b.modelId)
+    || collator.compare(a.provider, b.provider)
+    || collator.compare(a.modelId, b.modelId);
 }
 
 const THINKING_LEVELS = ["auto", "off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
-const THINKING_LEVEL_DESC: Record<typeof THINKING_LEVELS[number], string> = {
-  auto: "Use omp default",
-  off: "Reasoning off",
-  minimal: "Minimal reasoning",
-  low: "Low reasoning",
-  medium: "Medium reasoning",
-  high: "High reasoning",
-  xhigh: "Extra-high reasoning",
-  max: "Max reasoning",
+const THINKING_LEVEL_DESC_KEYS: Record<typeof THINKING_LEVELS[number], string> = {
+  auto: "chatInput.thinkingAuto",
+  off: "chatInput.thinkingOff",
+  minimal: "chatInput.thinkingMinimal",
+  low: "chatInput.thinkingLow",
+  medium: "chatInput.thinkingMedium",
+  high: "chatInput.thinkingHigh",
+  xhigh: "chatInput.thinkingXhigh",
+  max: "chatInput.thinkingMax",
 };
 
-function formatTokenCount(tokens: number): string {
+function formatTokenCount(tokens: number, locale: string): string {
   if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
   if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}k`;
-  return tokens.toLocaleString();
+  return tokens.toLocaleString(locale);
 }
 
 type SlashCommandPaletteItem = SlashCommandInfo | {
@@ -111,21 +111,21 @@ type SlashCommandPaletteItem = SlashCommandInfo | {
 
 type SlashCommandSource = SlashCommandPaletteItem["source"];
 
-const BUILTIN_SLASH_COMMANDS: SlashCommandPaletteItem[] = [
-  { name: "compact", description: "Compress context, optionally with instructions", source: "builtin" },
-  { name: "reload", description: "Reload extensions, skills, prompts, and tools", source: "builtin" },
-  { name: "name", description: "Set the session display name", source: "builtin" },
-  { name: "session", description: "Show session message, token, and cost stats", source: "builtin" },
-  { name: "copy", description: "Copy the last assistant message", source: "builtin" },
+const BUILTIN_SLASH_COMMAND_DEFS: { name: string; descriptionKey: string }[] = [
+  { name: "compact", descriptionKey: "chatInput.cmdCompact" },
+  { name: "reload", descriptionKey: "chatInput.cmdReload" },
+  { name: "name", descriptionKey: "chatInput.cmdName" },
+  { name: "session", descriptionKey: "chatInput.cmdSession" },
+  { name: "copy", descriptionKey: "chatInput.cmdCopy" },
 ];
 
 const SLASH_SOURCES: SlashCommandSource[] = ["builtin", "extension", "prompt", "skill"];
 
-const SLASH_SOURCE_GROUP_LABEL: Record<SlashCommandSource, string> = {
-  builtin: "Built-in",
-  extension: "Extensions",
-  prompt: "Prompts",
-  skill: "Skills",
+const SLASH_SOURCE_GROUP_LABEL_KEYS: Record<SlashCommandSource, string> = {
+  builtin: "chatInput.groupBuiltin",
+  extension: "chatInput.groupExtensions",
+  prompt: "chatInput.groupPrompts",
+  skill: "chatInput.groupSkills",
 };
 
 const SLASH_SOURCE_ORDER: Record<SlashCommandSource, number> = {
@@ -170,6 +170,7 @@ function revokeImagePreview(image: AttachedImage): void {
 }
 
 function QueuedMessageRow({ kind, text }: { kind: "steer" | "follow-up"; text: string }) {
+  const { t } = useI18n();
   return (
     <div
       title={text}
@@ -194,7 +195,7 @@ function QueuedMessageRow({ kind, text }: { kind: "steer" | "follow-up"; text: s
           color: kind === "steer" ? "var(--accent)" : "var(--text-dim)",
         }}
       >
-        {kind}
+        {kind === "steer" ? t("chatInput.kindSteer") : t("chatInput.kindFollowUp")}
       </span>
       <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{text}</span>
     </div>
@@ -202,6 +203,7 @@ function QueuedMessageRow({ kind, text }: { kind: "steer" | "follow-up"; text: s
 }
 
 export function ModelErrorBanner({ error }: { error?: string | null }) {
+  const { t } = useI18n();
   if (!error) return null;
   return (
     <div
@@ -239,7 +241,7 @@ export function ModelErrorBanner({ error }: { error?: string | null }) {
         <line x1="12" y1="17" x2="12.01" y2="17" />
       </svg>
       <div style={{ minWidth: 0 }}>
-        <div style={{ fontWeight: 600 }}>Model error</div>
+        <div style={{ fontWeight: 600 }}>{t("chatInput.modelError")}</div>
         <div style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{error}</div>
       </div>
     </div>
@@ -259,6 +261,11 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   cwd,
 }: Props, ref) {
   const isMobile = useIsMobile();
+  const { t, tn, locale } = useI18n();
+  const modelCollator = React.useMemo(
+    () => new Intl.Collator(locale, { numeric: true, sensitivity: "base" }),
+    [locale],
+  );
   const [value, setValue] = useState(() => (draftKey ? getDraft(draftKey)?.value ?? "" : ""));
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const [modelDropdownRect, setModelDropdownRect] = useState<{ top: number; left: number; width: number } | null>(null);
@@ -493,9 +500,18 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     ? value.slice(1).toLowerCase()
     : null;
 
+  const builtinSlashCommands: SlashCommandPaletteItem[] = React.useMemo(
+    () => BUILTIN_SLASH_COMMAND_DEFS.map((def) => ({
+      name: def.name,
+      description: t(def.descriptionKey),
+      source: "builtin" as const,
+    })),
+    [t],
+  );
+
   const filteredSlashCommands = (() => {
     if (slashQuery === null) return [];
-    const commands = [...(isStreaming ? [] : BUILTIN_SLASH_COMMANDS), ...(slashCommands ?? [])];
+    const commands = [...(isStreaming ? [] : builtinSlashCommands), ...(slashCommands ?? [])];
     return [...commands]
       .filter((command) => {
         const name = command.name.toLowerCase();
@@ -506,7 +522,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         const rankDelta = slashMatchRank(a, slashQuery) - slashMatchRank(b, slashQuery);
         if (rankDelta !== 0) return rankDelta;
         return SLASH_SOURCE_ORDER[a.source] - SLASH_SOURCE_ORDER[b.source]
-          || MODEL_OPTION_COLLATOR.compare(a.name, b.name);
+          || modelCollator.compare(a.name, b.name);
       });
   })();
 
@@ -523,9 +539,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
       .filter((group) => group.items.length > 0);
   })();
 
-  const slashCommandCountLabel = filteredSlashCommands.length === 1
-    ? (slashQuery ? "1 match" : "1 command")
-    : `${filteredSlashCommands.length} ${slashQuery ? "matches" : "commands"}`;
+  const slashCommandCountLabel = slashQuery
+    ? tn("chatInput.matchCount", filteredSlashCommands.length)
+    : tn("chatInput.commandCount", filteredSlashCommands.length);
   const hasInputText = Boolean(value.trim());
   const canQueueStreamingMessage = hasInputText && attachedImages.length === 0;
 
@@ -948,13 +964,14 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   // Build model options: prefer modelList (has provider info), fallback to modelNames
   const modelOptions: ModelOption[] = (() => {
     if (modelList && modelList.length > 0) {
-      return modelList.map((m) => ({ provider: m.provider, modelId: m.id, name: m.name })).sort(compareModelOptions);
+      return modelList.map((m) => ({ provider: m.provider, modelId: m.id, name: m.name }))
+        .sort((a, b) => compareModelOptions(modelCollator, a, b));
     }
     return Object.entries(modelNames ?? {}).map(([modelId, name]) => ({
       provider: model?.provider ?? "unknown",
       modelId,
       name,
-    })).sort(compareModelOptions);
+    })).sort((a, b) => compareModelOptions(modelCollator, a, b));
   })();
 
   // Group options by provider, preserving insertion order
@@ -974,10 +991,17 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     ? Math.max(0, compactResult.tokensBefore - compactResult.estimatedTokensAfter)
     : 0;
   const compactVerb = compactResult?.reason && compactResult.reason !== "manual"
-    ? `${compactResult.reason[0].toUpperCase()}${compactResult.reason.slice(1)} compacted`
-    : "Compacted";
+    ? t("chatInput.compactedWithReason", {
+        reason: `${compactResult.reason[0].toUpperCase()}${compactResult.reason.slice(1)}`,
+      })
+    : t("chatInput.compacted");
   const compactResultText = compactResult
-    ? `${compactVerb} ${formatTokenCount(compactResult.tokensBefore)} -> ${formatTokenCount(compactResult.estimatedTokensAfter)} tokens (${formatTokenCount(compactSavedTokens)} saved)`
+    ? t("chatInput.compactResult", {
+        verb: compactVerb,
+        before: formatTokenCount(compactResult.tokensBefore, locale),
+        after: formatTokenCount(compactResult.estimatedTokensAfter, locale),
+        saved: formatTokenCount(compactSavedTokens, locale),
+      })
     : null;
   const thinkingDisplayLabel = (() => {
     const lvl = thinkingLevel ?? "auto";
@@ -1066,12 +1090,12 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 textTransform: "uppercase",
                 letterSpacing: 0.4,
               }}>
-                Queued · {(queuedMessages?.steering.length ?? 0) + (queuedMessages?.followUp.length ?? 0)}
+                {t("chatInput.queuedCount", { count: (queuedMessages?.steering.length ?? 0) + (queuedMessages?.followUp.length ?? 0) })}
               </span>
               {onRecallQueue && (
                 <button
                   onClick={onRecallQueue}
-                  title="Remove all queued messages and put them back into the input box for editing"
+                  title={t("chatInput.recallQueueTitle")}
                   style={{
                     display: "flex",
                     alignItems: "center",
@@ -1099,7 +1123,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                     <polyline points="9 14 4 9 9 4" />
                     <path d="M20 20v-7a4 4 0 0 0-4-4H4" />
                   </svg>
-                  Recall to input
+                  {t("chatInput.recallToInput")}
                 </button>
               )}
             </div>
@@ -1123,7 +1147,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
               <path d="M3 3v5h5" />
             </svg>
-            Retrying ({retryInfo.attempt}/{retryInfo.maxAttempts})…{retryInfo.errorMessage && <span style={{ opacity: 0.7, marginLeft: 4 }}>— {retryInfo.errorMessage}</span>}
+            {t("chatInput.retrying", { attempt: retryInfo.attempt, maxAttempts: retryInfo.maxAttempts })}{retryInfo.errorMessage && <span style={{ opacity: 0.7, marginLeft: 4 }}>— {retryInfo.errorMessage}</span>}
           </div>
         )}
         {compactResultText && (
@@ -1189,7 +1213,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               }}
             >
               <div
-                title="Input history"
+                title={t("chatInput.inputHistory")}
                 style={{
                   height: 30,
                   padding: "0 10px",
@@ -1286,13 +1310,13 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                   color: "var(--text-dim)",
                 }}
               >
-                <span>{slashCommandsLoading ? "Loading commands..." : `Slash commands · ${slashCommandCountLabel}`}</span>
-                <span style={{ fontFamily: "var(--font-mono)" }}>Tab / Enter</span>
+                <span>{slashCommandsLoading ? t("chatInput.loadingCommands") : t("chatInput.slashCommandsHeader", { countLabel: slashCommandCountLabel })}</span>
+                <span style={{ fontFamily: "var(--font-mono)" }}>{t("chatInput.tabEnterHint")}</span>
               </div>
               <div style={{ maxHeight: "calc(min(56vh, 460px) - 34px)", overflowY: "auto", padding: 10 }}>
                 {!slashCommandsLoading && filteredSlashCommands.length === 0 ? (
                   <div style={{ padding: "2px 2px 4px", fontSize: 12, color: "var(--text-dim)" }}>
-                    No extension, prompt, or skill commands found
+                    {t("chatInput.noCommandsFound")}
                   </div>
                 ) : (
                   groupedSlashCommands.map((group) => (
@@ -1314,7 +1338,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                           textTransform: "uppercase",
                         }}
                       >
-                        <span>{SLASH_SOURCE_GROUP_LABEL[group.source]}</span>
+                        <span>{t(SLASH_SOURCE_GROUP_LABEL_KEYS[group.source])}</span>
                         <span style={{ fontFamily: "var(--font-mono)", fontWeight: 500 }}>{group.items.length}</span>
                       </div>
                       <div
@@ -1389,11 +1413,11 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
           )}
           {atMenuOpen && atQuery !== null && (() => {
             const indexLoading = fileIndexLoading && (!fileIndex || fileIndex.cwd !== cwd);
-            const matchCountLabel = atMatches.length === 1 ? "1 match" : `${atMatches.length} matches`;
+            const matchCountLabel = tn("chatInput.matchCount", atMatches.length);
             // With a truncated index, local results are provisional — the
             // debounced server search over the full listing replaces them.
             const truncatedHint = fileIndex?.truncated && !serverResultInUse
-              ? (atQuery.query ? " · searching all files…" : " · index truncated")
+              ? ` · ${atQuery.query ? t("chatInput.searchingAllFiles") : t("chatInput.indexTruncated")}`
               : "";
             return (
               <div
@@ -1425,15 +1449,15 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 >
                   <span>
                     {indexLoading
-                      ? "Loading files..."
-                      : `Files · ${matchCountLabel}${truncatedHint}`}
+                      ? t("chatInput.loadingFiles")
+                      : `${t("chatInput.filesHeader", { countLabel: matchCountLabel })}${truncatedHint}`}
                   </span>
-                  <span style={{ fontFamily: "var(--font-mono)" }}>Tab / Enter</span>
+                  <span style={{ fontFamily: "var(--font-mono)" }}>{t("chatInput.tabEnterHint")}</span>
                 </div>
                 <div style={{ maxHeight: "calc(min(48vh, 400px) - 34px)", overflowY: "auto", padding: 4 }}>
                   {!indexLoading && atMatches.length === 0 ? (
                     <div style={{ padding: "6px 8px", fontSize: 12, color: "var(--text-dim)" }}>
-                      {needsServerSearch && !serverResultInUse ? "Searching…" : "No matching files"}
+                      {needsServerSearch && !serverResultInUse ? t("chatInput.searching") : t("chatInput.noMatchingFiles")}
                     </div>
                   ) : (
                     atMatches.map((entry, index) => {
@@ -1525,9 +1549,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
             onPaste={handlePaste}
             placeholder={
               isStreaming && (onSteer || onFollowUp)
-                ? "Steer now / queue follow-up..."
-                : isStreaming ? "Agent is running…"
-                : "Message… Type / for commands, @ for files"
+                ? t("chatInput.placeholderSteer")
+                : isStreaming ? t("chatInput.placeholderRunning")
+                : t("chatInput.placeholder")
             }
             rows={1}
             style={{
@@ -1552,7 +1576,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 <button
                   onClick={() => sendQueued("steer")}
                   disabled={!canQueueStreamingMessage}
-                  title={attachedImages.length ? "Image attachments cannot be queued while the agent is running" : "Interrupt the current run and inject this message now"}
+                  title={attachedImages.length ? t("chatInput.imagesCannotQueue") : t("chatInput.steerNowTitle")}
                   style={{
                     display: "flex", alignItems: "center", gap: 5,
                     padding: "7px 12px",
@@ -1568,14 +1592,14 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                   <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M5 1 L9 5 L5 9" /><line x1="1" y1="5" x2="9" y2="5" />
                   </svg>
-                  Steer
+                  {t("chatInput.steer")}
                 </button>
               )}
               {onFollowUp && (
                 <button
                   onClick={() => sendQueued("followup")}
                   disabled={!canQueueStreamingMessage}
-                  title={attachedImages.length ? "Image attachments cannot be queued while the agent is running" : "Queue this message after the agent finishes"}
+                  title={attachedImages.length ? t("chatInput.imagesCannotQueue") : t("chatInput.followUpTitle")}
                   style={{
                     display: "flex", alignItems: "center", gap: 5,
                     padding: "7px 12px",
@@ -1592,7 +1616,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                     <line x1="5" y1="1" x2="5" y2="6" /><polyline points="2.5 3.5 5 1 7.5 3.5" />
                     <line x1="2" y1="9" x2="8" y2="9" />
                   </svg>
-                  Follow-up
+                  {t("chatInput.followUp")}
                 </button>
               )}
             </div>
@@ -1621,7 +1645,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 <line x1="2" y1="7" x2="11" y2="7" />
                 <polyline points="7.5 3 12 7 7.5 11" />
               </svg>
-              Send
+              {t("chatInput.send")}
             </button>
           )}
           </div>
@@ -1630,7 +1654,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
         {/* Bash mode status label */}
         {bashMode && (
           <div className="text-xs px-2 py-1" style={{ color: bashExcluded ? "var(--text-muted)" : "var(--accent)", marginTop: 4 }}>
-            Shell · {bashExcluded ? "output stays local" : "output sent to model"}
+            {bashExcluded ? t("chatInput.shellLocal") : t("chatInput.shellToModel")}
           </div>
         )}
 
@@ -1648,7 +1672,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
             <button
               onClick={() => fileInputRef.current?.click()}
               disabled={isStreaming}
-              title="Attach image"
+              title={t("chatInput.attachImage")}
               style={{
                 flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
                 width: 32, height: 32, padding: 0,
@@ -1711,7 +1735,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                       e.currentTarget.style.background = modelDropdownOpen ? "var(--bg-hover)" : "none";
                       e.currentTarget.style.color = "var(--text-muted)";
                     }}
-                    title={modelOptions.length > 0 ? "Change model" : "No available models"}
+                    title={modelOptions.length > 0 ? t("chatInput.changeModel") : t("chatInput.noAvailableModels")}
                   >
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <rect x="4" y="4" width="16" height="16" rx="2" />
@@ -1722,7 +1746,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                       <line x1="1" y1="9" x2="4" y2="9" /><line x1="1" y1="14" x2="4" y2="14" />
                     </svg>
                     <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
-                      {currentName ?? (modelOptions.length > 0 ? "Select model" : "No models")}
+                      {currentName ?? (modelOptions.length > 0 ? t("chatInput.selectModel") : t("chatInput.noModels"))}
                     </span>
                   </button>
                   {modelDropdownOpen && modelDropdownRect && (() => {
@@ -1745,7 +1769,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                       }}>
                       {modelsByProvider.length === 0 ? (
                         <div style={{ padding: "8px 12px", color: "var(--text-dim)", fontSize: 12, whiteSpace: "nowrap" }}>
-                          No available models
+                          {t("chatInput.noAvailableModels")}
                         </div>
                       ) : modelsByProvider.map((group, gi) => (
                         <div key={group.provider}>
@@ -1809,8 +1833,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
             {isMobile && (
               <button
                 type="button"
-                title={controlsMenuOpen ? undefined : "More controls"}
-                aria-label="More controls"
+                title={controlsMenuOpen ? undefined : t("chatInput.moreControls")}
+                aria-label={t("chatInput.moreControls")}
                 aria-expanded={controlsMenuOpen}
                 aria-hidden={controlsMenuOpen || undefined}
                 tabIndex={controlsMenuOpen ? -1 : undefined}
@@ -1847,7 +1871,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                   e.currentTarget.style.color = "var(--text-muted)";
                 }}
               >
-                More
+                {t("chatInput.more")}
               </button>
             )}
             <div style={{
@@ -1876,8 +1900,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 <button
                   onClick={() => !isStreaming && setThinkingDropdownOpen((v) => !v)}
                   disabled={isStreaming}
-                  title={`Change reasoning level: ${thinkingDisplayLabel}`}
-                  aria-label="Change reasoning level"
+                  title={t("chatInput.changeReasoningTitle", { level: thinkingDisplayLabel })}
+                  aria-label={t("chatInput.changeReasoning")}
                   style={{
                     display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
                     padding: isMobile ? "0 6px" : "8px 12px",
@@ -1922,7 +1946,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                       return availableThinkingLevels.includes(lvl);
                     }).map((lvl) => {
                       const isActive = (thinkingLevel ?? "auto") === lvl;
-                      const desc = THINKING_LEVEL_DESC[lvl];
+                      const desc = t(THINKING_LEVEL_DESC_KEYS[lvl]);
                       const mappedVal = (lvl !== "auto" && thinkingLevelMap) ? thinkingLevelMap[lvl] : undefined;
                       const displayLabel = (mappedVal != null && mappedVal !== lvl) ? mappedVal : lvl;
                       const showOriginal = mappedVal != null && mappedVal !== lvl;
@@ -1963,8 +1987,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 <button
                   onClick={() => !isStreaming && setToolDropdownOpen((v) => !v)}
                   disabled={isStreaming}
-                  title={`Change tool preset: ${toolPresetLabel}`}
-                  aria-label="Change tool preset"
+                  title={t("chatInput.changeToolPresetTitle", { preset: toolPresetLabel })}
+                  aria-label={t("chatInput.changeToolPreset")}
                   style={{
                     display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
                     padding: isMobile ? "0 6px" : "8px 12px",
@@ -2004,7 +2028,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                     {TOOL_PRESETS.map((lvl) => {
                       const preset = TOOL_PRESET_MAP[lvl];
                       const isActive = (toolPreset ?? "default") === preset;
-                      const desc = lvl === "off" ? "No tools, read-only" : lvl === "default" ? "4 built-in tools" : "All built-in tools";
+                      const desc = lvl === "off" ? t("chatInput.toolsOff") : lvl === "default" ? t("chatInput.toolsDefault") : t("chatInput.toolsFull");
                       return (
                         <button
                           key={lvl}
@@ -2073,16 +2097,16 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                     e.currentTarget.style.background = isCompacting ? "rgba(239,68,68,0.08)" : "none";
                     e.currentTarget.style.color = isCompacting ? "#ef4444" : "var(--text-muted)";
                   }}
-                  title={isCompacting ? "Stop compaction" : "Compact context"}
-                  aria-label={isCompacting ? "Stop compaction" : "Compact context"}
+                  title={isCompacting ? t("chatInput.stopCompaction") : t("chatInput.compactContext")}
+                  aria-label={isCompacting ? t("chatInput.stopCompaction") : t("chatInput.compactContext")}
                 >
                   {isCompacting ? (
-                    <><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><rect x="2" y="2" width="6" height="6" rx="1" fill="currentColor" /></svg>{(!isMobile || controlsMenuOpen) && <span style={{ whiteSpace: "nowrap" }}>Compacting…</span>}</>
+                    <><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><rect x="2" y="2" width="6" height="6" rx="1" fill="currentColor" /></svg>{(!isMobile || controlsMenuOpen) && <span style={{ whiteSpace: "nowrap" }}>{t("chatInput.compacting")}</span>}</>
                   ) : (
                     <><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <polyline points="4 14 10 14 10 20" /><polyline points="20 10 14 10 14 4" />
                       <line x1="10" y1="14" x2="3" y2="21" /><line x1="21" y1="3" x2="14" y2="10" />
-                    </svg>{(!isMobile || controlsMenuOpen) && <span style={{ whiteSpace: "nowrap" }}>Compact</span>}</>
+                    </svg>{(!isMobile || controlsMenuOpen) && <span style={{ whiteSpace: "nowrap" }}>{t("chatInput.compact")}</span>}</>
                   )}
                 </button>
               </div>
@@ -2091,7 +2115,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
             {isStreaming && (
               <button
                 onClick={onAbort}
-                title="Stop agent"
+                title={t("chatInput.stopAgent")}
                 style={{
                   display: "flex", alignItems: "center", gap: 6,
                   padding: "8px 14px",
@@ -2111,15 +2135,15 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
                   <rect x="1.5" y="1.5" width="7" height="7" rx="1.5" fill="currentColor" />
                 </svg>
-                Stop
+                {t("chatInput.stop")}
               </button>
             )}
 
             {onSoundToggle !== undefined && (
               <button
                 onClick={onSoundToggle}
-                title={soundEnabled ? "Disable completion sound" : "Enable completion sound"}
-                aria-label={soundEnabled ? "Disable completion sound" : "Enable completion sound"}
+                title={soundEnabled ? t("chatInput.disableSound") : t("chatInput.enableSound")}
+                aria-label={soundEnabled ? t("chatInput.disableSound") : t("chatInput.enableSound")}
                 style={{
                   display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
                   width: isMobile ? 32 : 32,
@@ -2162,8 +2186,8 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
             {isMobile && controlsMenuOpen && (
               <button
                 type="button"
-                title="Collapse controls"
-                aria-label="Collapse controls"
+                title={t("chatInput.collapseControls")}
+                aria-label={t("chatInput.collapseControls")}
                 aria-expanded={true}
                 onClick={() => {
                   setToolDropdownOpen(false);

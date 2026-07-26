@@ -15,7 +15,7 @@ export async function GET(
   try {
     const filePath = await resolveSessionPath(id);
     if (!filePath) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+      return NextResponse.json({ error: "Session not found", code: "session_not_found" }, { status: 404 });
     }
 
     const { header, entries } = loadSessionFile(filePath, {
@@ -23,7 +23,7 @@ export async function GET(
       skipToolResultImages: deferToolResultImages,
     });
     if (!header) {
-      return NextResponse.json({ error: "Session file is missing or malformed" }, { status: 404 });
+      return NextResponse.json({ error: "Session file is missing or malformed", code: "session_file_malformed" }, { status: 404 });
     }
     const context = buildSessionContext(entries, leafId, {
       deferThinking,

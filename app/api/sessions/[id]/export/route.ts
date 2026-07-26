@@ -51,7 +51,7 @@ export async function GET(
   try {
     const filePath = await resolveSessionPath(id);
     if (!filePath) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+      return NextResponse.json({ error: "Session not found", code: "session_not_found" }, { status: 404 });
     }
 
     const tempDir = join(tmpdir(), "omp-web-export");
@@ -76,6 +76,10 @@ export async function GET(
       rmSync(outputPath, { force: true });
     }
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("omp binary not found")) {
+      return NextResponse.json({ error: message, code: "omp_not_found" }, { status: 500 });
+    }
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }
 }

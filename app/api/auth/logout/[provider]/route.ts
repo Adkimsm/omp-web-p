@@ -16,6 +16,7 @@ export async function POST(
       error:
         `omp-web cannot disconnect "${provider}": omp exposes no logout command outside its own UI. ` +
         "Run `omp` in a terminal and use /logout to remove the credential.",
+      code: "logout_unsupported",
     },
     { status: 501 },
   );

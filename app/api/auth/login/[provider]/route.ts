@@ -43,15 +43,15 @@ export async function POST(
   const { token, code } = (await req.json()) as { token?: string; code?: string };
 
   if (!token || !code) {
-    return Response.json({ error: "token and code required" }, { status: 400 });
+    return Response.json({ error: "token and code required", code: "login_token_code_required" }, { status: 400 });
   }
   // Verify token belongs to this provider (token format: "<provider>-<ts>-<random>")
   if (!token.startsWith(`${provider}-`)) {
-    return Response.json({ error: "Token does not match provider" }, { status: 400 });
+    return Response.json({ error: "Token does not match provider", code: "login_token_mismatch" }, { status: 400 });
   }
   const pending = getLoginRegistry().get(token);
   if (!pending) {
-    return Response.json({ error: "No pending login for token" }, { status: 404 });
+    return Response.json({ error: "No pending login for token", code: "login_no_pending" }, { status: 404 });
   }
 
   pending.submit(code);

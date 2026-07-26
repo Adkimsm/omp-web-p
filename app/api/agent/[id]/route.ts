@@ -21,7 +21,7 @@ export async function POST(
 
     const filePath = await resolveSessionPath(id);
     if (!filePath) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+      return NextResponse.json({ error: "Session not found", code: "session_not_found" }, { status: 404 });
     }
 
     const cwd = readSessionHeader(filePath)?.cwd ?? process.cwd();

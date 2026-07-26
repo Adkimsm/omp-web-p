@@ -11,7 +11,10 @@ import { ModelsConfig } from "./ModelsConfig";
 import { SkillsConfig } from "./SkillsConfig";
 import { PluginsConfig } from "./PluginsConfig";
 import { BranchNavigator } from "./BranchNavigator";
+import { LanguageSwitcher } from "./LanguageSwitcher";
 import { useTheme } from "@/hooks/useTheme";
+import { useI18n } from "@/lib/i18n";
+import { formatApiError } from "@/lib/i18n/api-error";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { copyText } from "@/lib/clipboard";
 import { getFileName } from "@/lib/file-paths";
@@ -33,6 +36,7 @@ export function AppShell() {
   const searchParams = useSearchParams();
   const [initialNavigation] = useState(() => getInitialNavigation(searchParams));
   const { isDark, toggleTheme } = useTheme();
+  const { t, locale } = useI18n();
   const isMobile = useIsMobile();
   const [selectedSession, setSelectedSession] = useState<SessionInfo | null>(null);
   // When user clicks +, we only store the cwd — no fake session id
@@ -188,9 +192,9 @@ export function AppShell() {
       signal: controller.signal,
     })
       .then(async (response) => {
-        const data = await response.json().catch(() => ({})) as { cwd?: string; error?: string };
+        const data = await response.json().catch(() => ({})) as { cwd?: string; error?: string; code?: string };
         if (!response.ok || !data.cwd) {
-          throw new Error(data.error ?? `HTTP ${response.status}`);
+          throw new Error(data.error || data.code ? formatApiError(data) : `HTTP ${response.status}`);
         }
 
         // The sidebar will notify us when it adopts this cwd. Avoid remounting
@@ -316,9 +320,9 @@ export function AppShell() {
       const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/auto-name`, {
         method: "POST",
       });
-      const body = (await response.json().catch(() => ({}))) as { title?: string; error?: string };
+      const body = (await response.json().catch(() => ({}))) as { title?: string; error?: string; code?: string };
       if (!response.ok || !body.title) {
-        throw new Error(body.error || `HTTP ${response.status}`);
+        throw new Error(body.error || body.code ? formatApiError(body) : `HTTP ${response.status}`);
       }
 
       const title = body.title.trim();
@@ -459,7 +463,7 @@ export function AppShell() {
       <div style={{ padding: "8px", flexShrink: 0, display: "flex", justifyContent: "space-between", gap: 4 }}>
         {([
           {
-            label: "Models",
+            label: t("appShell.models"),
             onClick: () => setModelsConfigOpen(true),
             disabled: false,
             icon: (
@@ -473,7 +477,7 @@ export function AppShell() {
             ),
           },
           {
-            label: "Skills",
+            label: t("appShell.skills"),
             onClick: () => setSkillsConfigOpen(true),
             disabled: !activeCwd && !selectedSession?.cwd && !newSessionCwd,
             icon: (
@@ -485,7 +489,7 @@ export function AppShell() {
             ),
           },
           {
-            label: "Plugins",
+            label: t("appShell.plugins"),
             onClick: () => setPluginsConfigOpen(true),
             disabled: !activeCwd && !selectedSession?.cwd && !newSessionCwd,
             icon: (
@@ -631,8 +635,8 @@ export function AppShell() {
         <div ref={topBarRef} style={{ display: "flex", alignItems: "center", flexShrink: 0, borderBottom: "1px solid var(--border)", height: 36, background: "var(--bg-panel)" }}>
           <button
             onClick={handleSidebarToggle}
-            title={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
-            aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"}
+            title={sidebarOpen ? t("appShell.hideSidebar") : t("appShell.showSidebar")}
+            aria-label={sidebarOpen ? t("appShell.hideSidebar") : t("appShell.showSidebar")}
             style={{
               display: "flex", alignItems: "center", justifyContent: "center",
               width: 36, height: 36, padding: 0,
@@ -657,8 +661,8 @@ export function AppShell() {
               const rect = e.currentTarget.getBoundingClientRect();
               toggleTheme({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
             }}
-            title={isDark ? "Switch to light mode" : "Switch to dark mode"}
-            aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+            title={isDark ? t("appShell.switchToLightMode") : t("appShell.switchToDarkMode")}
+            aria-label={isDark ? t("appShell.switchToLightMode") : t("appShell.switchToDarkMode")}
             aria-pressed={isDark}
             style={{
               display: "flex", alignItems: "center", justifyContent: "center",
@@ -683,13 +687,14 @@ export function AppShell() {
               </svg>
             )}
           </button>
+          <LanguageSwitcher />
           {showChat && (
             <div style={{ display: "flex", alignItems: "stretch", height: "100%" }}>
               <button
                 onClick={handleViewFullHistory}
                 disabled={!selectedSession}
-                title={selectedSession ? "View full history" : "Full history is available after the session is saved"}
-                aria-label="View full history"
+                title={selectedSession ? t("appShell.viewFullHistory") : t("appShell.fullHistoryUnavailable")}
+                aria-label={t("appShell.viewFullHistory")}
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -736,7 +741,7 @@ export function AppShell() {
                   <path d="M3 3v5h5" />
                   <path d="M12 7v5l3 2" />
                 </svg>
-                {!isMobile && <span>Full history</span>}
+                {!isMobile && <span>{t("appShell.fullHistory")}</span>}
               </button>
               {(() => {
                 const hasMessages = Boolean(
@@ -747,19 +752,19 @@ export function AppShell() {
                 const isSuccess = autoNameStatus.kind === "success";
                 const isError = autoNameStatus.kind === "error";
                 const label = autoNameStatus.kind === "naming"
-                  ? "Generating..."
+                  ? t("appShell.generating")
                   : isSuccess
-                    ? "Title updated"
+                    ? t("appShell.titleUpdated")
                     : isError
-                      ? "Generation failed"
-                      : "Generate title";
+                      ? t("appShell.generationFailed")
+                      : t("appShell.generateTitle");
                 const title = !selectedSession
-                  ? "Title generation is available after the session is saved"
+                  ? t("appShell.titleGenUnavailable")
                   : !hasMessages
-                    ? "Send a message before naming this session"
+                    ? t("appShell.titleGenNeedsMessage")
                     : isError
                       ? autoNameStatus.message
-                      : "Generate a session title";
+                      : t("appShell.generateSessionTitle");
 
                 return (
                   <button
@@ -824,8 +829,8 @@ export function AppShell() {
               <button
                 ref={systemBtnRef}
                 onClick={() => toggleTopPanel("system")}
-                title="System prompt"
-                aria-label="System prompt"
+                title={t("appShell.systemPrompt")}
+                aria-label={t("appShell.systemPrompt")}
                 aria-pressed={activeTopPanel === "system"}
                 style={{
                   display: "flex", alignItems: "center", gap: 6,
@@ -847,13 +852,13 @@ export function AppShell() {
                   <line x1="8" y1="13" x2="16" y2="13" />
                   <line x1="8" y1="17" x2="13" y2="17" />
                 </svg>
-                {!isMobile && <span>System</span>}
+                {!isMobile && <span>{t("appShell.system")}</span>}
               </button>
             </div>
           )}
           {/* Session stats — right-aligned in top bar */}
           {showChat && (sessionStats || contextUsage) && (() => {
-            const t = sessionStats?.tokens;
+            const tok = sessionStats?.tokens;
             const c = sessionStats?.cost ?? 0;
             const fmt = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(0)}k` : String(n);
             const costStr = c > 0 ? (c >= 0.01 ? `$${c.toFixed(2)}` : `<$0.01`) : null;
@@ -868,16 +873,19 @@ export function AppShell() {
             }
 
             const tooltipParts: string[] = [];
-            if (t) {
-              tooltipParts.push(`in: ${t.input.toLocaleString()}`);
-              tooltipParts.push(`out: ${t.output.toLocaleString()}`);
-              tooltipParts.push(`cache read: ${t.cacheRead.toLocaleString()}`);
-              tooltipParts.push(`cache write: ${t.cacheWrite.toLocaleString()}`);
-              if (c > 0) tooltipParts.push(`cost: $${c.toFixed(4)}`);
+            if (tok) {
+              tooltipParts.push(t("appShell.tooltipInput", { value: tok.input.toLocaleString(locale) }));
+              tooltipParts.push(t("appShell.tooltipOutput", { value: tok.output.toLocaleString(locale) }));
+              tooltipParts.push(t("appShell.tooltipCacheRead", { value: tok.cacheRead.toLocaleString(locale) }));
+              tooltipParts.push(t("appShell.tooltipCacheWrite", { value: tok.cacheWrite.toLocaleString(locale) }));
+              if (c > 0) tooltipParts.push(t("appShell.tooltipCost", { value: c.toFixed(4) }));
             }
             if (contextUsage?.contextWindow) {
               const pct = contextUsage.percent;
-              tooltipParts.push(`context: ${pct !== null ? pct.toFixed(1) + "%" : "unknown"} of ${contextUsage.contextWindow.toLocaleString()} tokens`);
+              tooltipParts.push(t("appShell.tooltipContext", {
+                percent: pct !== null ? pct.toFixed(1) + "%" : t("appShell.unknown"),
+                tokens: contextUsage.contextWindow.toLocaleString(locale),
+              }));
             }
             const tooltip = tooltipParts.join("  |  ");
 
@@ -885,8 +893,8 @@ export function AppShell() {
               <button
                 type="button"
                 onClick={() => toggleTopPanel("session")}
-                title={tooltip || "Session info"}
-                aria-label="Session info"
+                title={tooltip || t("appShell.sessionInfo")}
+                aria-label={t("appShell.sessionInfo")}
                 aria-pressed={activeTopPanel === "session"}
                 style={{
                   marginLeft: "auto",
@@ -910,28 +918,28 @@ export function AppShell() {
                     <circle cx="12" cy="12" r="10" /><line x1="12" y1="16" x2="12" y2="12" /><line x1="12" y1="8" x2="12.01" y2="8" />
                   </svg>
                 )}
-                {!isMobile && t && t.input > 0 && (
+                {!isMobile && tok && tok.input > 0 && (
                   <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
                     <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
                       <line x1="5" y1="8.5" x2="5" y2="1.5" /><polyline points="2 4 5 1.5 8 4" />
                     </svg>
-                    {fmt(t.input)}
+                    {fmt(tok.input)}
                   </span>
                 )}
-                {!isMobile && t && t.output > 0 && (
+                {!isMobile && tok && tok.output > 0 && (
                   <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
                     <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
                       <line x1="5" y1="1.5" x2="5" y2="8.5" /><polyline points="2 6 5 8.5 8 6" />
                     </svg>
-                    {fmt(t.output)}
+                    {fmt(tok.output)}
                   </span>
                 )}
-                {!isMobile && t && t.cacheRead > 0 && (
+                {!isMobile && tok && tok.cacheRead > 0 && (
                   <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
                     <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M8.5 5a3.5 3.5 0 1 1-1-2.45" /><polyline points="6.5 1.5 8.5 2.5 7.5 4.5" />
                     </svg>
-                    {fmt(t.cacheRead)}
+                    {fmt(tok.cacheRead)}
                   </span>
                 )}
                 {!isMobile && costStr && (
@@ -981,11 +989,11 @@ export function AppShell() {
                     </div>
                   ) : systemPrompt === "" ? (
                     <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>
-                      System prompt is empty (tools are disabled)
+                      {t("appShell.systemPromptEmpty")}
                     </div>
                   ) : (
                     <div style={{ padding: "10px 16px", fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>
-                      Send a message to load the system prompt
+                      {t("appShell.systemPromptLoadHint")}
                     </div>
                   )}
                 </div>
@@ -999,29 +1007,29 @@ export function AppShell() {
                 }}>
                   {sessionStats ? (() => {
                     const sessionRows = [
-                      ...(sessionStats.sessionName ? [{ label: "Name", value: sessionStats.sessionName, copyField: null }] : []),
-                      { label: "File", value: sessionStats.sessionFile ?? "In-memory", copyField: "file" as const },
-                      { label: "ID", value: sessionStats.sessionId, copyField: "id" as const },
+                      ...(sessionStats.sessionName ? [{ label: t("appShell.statName"), value: sessionStats.sessionName, copyField: null }] : []),
+                      { label: t("appShell.statFile"), value: sessionStats.sessionFile ?? t("appShell.inMemory"), copyField: "file" as const },
+                      { label: t("appShell.statId"), value: sessionStats.sessionId, copyField: "id" as const },
                     ];
                     const messageRows = [
-                      ["User", sessionStats.userMessages.toLocaleString()],
-                      ["Assistant", sessionStats.assistantMessages.toLocaleString()],
-                      ["Tool Calls", sessionStats.toolCalls.toLocaleString()],
-                      ["Tool Results", sessionStats.toolResults.toLocaleString()],
-                      ["Total", sessionStats.totalMessages.toLocaleString()],
+                      [t("appShell.statUser"), sessionStats.userMessages.toLocaleString(locale)],
+                      [t("appShell.statAssistant"), sessionStats.assistantMessages.toLocaleString(locale)],
+                      [t("appShell.statToolCalls"), sessionStats.toolCalls.toLocaleString(locale)],
+                      [t("appShell.statToolResults"), sessionStats.toolResults.toLocaleString(locale)],
+                      [t("appShell.statTotal"), sessionStats.totalMessages.toLocaleString(locale)],
                     ];
                     const tokenRows = [
-                      ["Input", sessionStats.tokens.input.toLocaleString()],
-                      ["Output", sessionStats.tokens.output.toLocaleString()],
-                      ...(sessionStats.tokens.cacheRead > 0 ? [["Cache Read", sessionStats.tokens.cacheRead.toLocaleString()]] : []),
-                      ...(sessionStats.tokens.cacheWrite > 0 ? [["Cache Write", sessionStats.tokens.cacheWrite.toLocaleString()]] : []),
-                      ["Total", sessionStats.tokens.total.toLocaleString()],
+                      [t("appShell.statInput"), sessionStats.tokens.input.toLocaleString(locale)],
+                      [t("appShell.statOutput"), sessionStats.tokens.output.toLocaleString(locale)],
+                      ...(sessionStats.tokens.cacheRead > 0 ? [[t("appShell.statCacheRead"), sessionStats.tokens.cacheRead.toLocaleString(locale)]] : []),
+                      ...(sessionStats.tokens.cacheWrite > 0 ? [[t("appShell.statCacheWrite"), sessionStats.tokens.cacheWrite.toLocaleString(locale)]] : []),
+                      [t("appShell.statTotal"), sessionStats.tokens.total.toLocaleString(locale)],
                     ];
                     const ctx = contextUsage ?? sessionStats.contextUsage;
                     const formatCompact = (n: number) => n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(0)}k` : String(n);
                     const extraTokenRows = [
-                      ...(sessionStats.cost > 0 ? [["Cost", `$${sessionStats.cost.toFixed(4)}`]] : []),
-                      ...(ctx?.contextWindow ? [["Context", `${ctx.percent !== null ? `${ctx.percent.toFixed(1)}%` : "?"} / ${formatCompact(ctx.contextWindow)}`]] : []),
+                      ...(sessionStats.cost > 0 ? [[t("appShell.statCost"), `$${sessionStats.cost.toFixed(4)}`]] : []),
+                      ...(ctx?.contextWindow ? [[t("appShell.statContext"), `${ctx.percent !== null ? `${ctx.percent.toFixed(1)}%` : "?"} / ${formatCompact(ctx.contextWindow)}`]] : []),
                     ];
                     const section = (
                       title: string,
@@ -1058,7 +1066,7 @@ export function AppShell() {
                       return (
                         <button
                           type="button"
-                          title={copied ? "Copied" : `Copy ${field === "file" ? "file path" : "session ID"}`}
+                          title={copied ? t("appShell.copied") : field === "file" ? t("appShell.copyFilePath") : t("appShell.copySessionId")}
                           onClick={() => handleCopySessionField(field, value)}
                           style={{
                             alignSelf: "start",
@@ -1102,7 +1110,7 @@ export function AppShell() {
                     };
                     const sessionInfoSection = (
                       <div style={{ minWidth: 0 }}>
-                        <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text)", marginBottom: 6 }}>Session Info</div>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text)", marginBottom: 6 }}>{t("appShell.sectionSessionInfo")}</div>
                         <div style={{ display: "grid", gridTemplateColumns: "auto minmax(0, 1fr) auto", columnGap: 12, rowGap: 8, alignItems: "start" }}>
                           {sessionRows.map((row) => (
                             <div key={`session-info:${row.label}`} style={{ display: "contents" }}>
@@ -1133,13 +1141,13 @@ export function AppShell() {
                         fontFamily: "var(--font-mono)",
                       }}>
                         {sessionInfoSection}
-                        {section("Messages", messageRows)}
-                        {section("Tokens", [...tokenRows, ...extraTokenRows], "right", true)}
+                        {section(t("appShell.sectionMessages"), messageRows)}
+                        {section(t("appShell.sectionTokens"), [...tokenRows, ...extraTokenRows], "right", true)}
                       </div>
                     );
                   })() : (
                     <div style={{ fontSize: 12, color: "var(--text-muted)", fontStyle: "italic" }}>
-                      Send a message or run /session to load session info
+                      {t("appShell.sessionInfoLoadHint")}
                     </div>
                   )}
                 </div>
@@ -1173,7 +1181,7 @@ export function AppShell() {
               role="status"
               style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, padding: 24, color: "var(--text-muted)", textAlign: "center" }}
             >
-              <div style={{ fontSize: 14, color: "var(--text)" }}>Opening workspace...</div>
+              <div style={{ fontSize: 14, color: "var(--text)" }}>{t("appShell.openingWorkspace")}</div>
               <div style={{ maxWidth: "min(720px, 100%)", overflowWrap: "anywhere", fontFamily: "var(--font-mono)", fontSize: 12 }}>
                 {initialNavigation.requestedCwd}
               </div>
@@ -1183,7 +1191,7 @@ export function AppShell() {
               role="alert"
               style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, padding: 24, color: "var(--text-muted)", textAlign: "center" }}
             >
-              <div style={{ fontSize: 14, color: "#dc2626" }}>Unable to open workspace</div>
+              <div style={{ fontSize: 14, color: "#dc2626" }}>{t("appShell.unableToOpenWorkspace")}</div>
               <div style={{ maxWidth: "min(720px, 100%)", overflowWrap: "anywhere", fontFamily: "var(--font-mono)", fontSize: 12 }}>
                 {initialNavigation.requestedCwd}
               </div>
@@ -1192,7 +1200,7 @@ export function AppShell() {
           ) : showPlaceholder ? (
             activeCwd ? (
               <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", fontSize: 15 }}>
-                Select a session from the sidebar
+                {t("appShell.selectSessionHint")}
               </div>
             ) : (
               <div style={{ position: "absolute", top: 12, left: 12, display: "flex", alignItems: "flex-start", gap: 8, userSelect: "none", pointerEvents: "none" }}>
@@ -1200,10 +1208,22 @@ export function AppShell() {
                   <line x1="20" y1="12" x2="4" y2="12" /><polyline points="10 6 4 12 10 18" />
                 </svg>
                 <div>
-                  <div style={{ fontSize: 18, fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>Get Started</div>
+                  <div style={{ fontSize: 18, fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>{t("appShell.getStarted")}</div>
                   <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.8 }}>
-                    <span style={{ color: "var(--text-dim)", marginRight: 6 }}>1.</span>Select a project directory from the sidebar<br />
-                    <span style={{ color: "var(--text-dim)", marginRight: 6 }}>2.</span>Add models via the <strong style={{ color: "var(--text)" }}>Models</strong> button at the bottom
+                    <span style={{ color: "var(--text-dim)", marginRight: 6 }}>1.</span>{t("appShell.getStartedStep1")}<br />
+                    <span style={{ color: "var(--text-dim)", marginRight: 6 }}>2.</span>
+                    {(() => {
+                      // One translatable sentence; the {models} slot is rendered
+                      // as the emphasized button name so word order stays free.
+                      const [before, after] = t("appShell.getStartedStep2").split("{models}");
+                      return (
+                        <>
+                          {before}
+                          <strong style={{ color: "var(--text)" }}>{t("appShell.models")}</strong>
+                          {after}
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
               </div>
@@ -1252,7 +1272,7 @@ export function AppShell() {
             />
           ) : (
             <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)", fontSize: 12 }}>
-              No file open
+              {t("appShell.noFileOpen")}
             </div>
           )}
         </div>
@@ -1261,8 +1281,8 @@ export function AppShell() {
     {/* File panel toggle — always visible at top-right */}
     <button
       onClick={() => setRightPanelOpen((v) => !v)}
-      title={rightPanelOpen ? "Hide file panel" : "Show file panel"}
-      aria-label={rightPanelOpen ? "Hide file panel" : "Show file panel"}
+      title={rightPanelOpen ? t("appShell.hideFilePanel") : t("appShell.showFilePanel")}
+      aria-label={rightPanelOpen ? t("appShell.hideFilePanel") : t("appShell.showFilePanel")}
       style={{
         position: "fixed", top: 0, right: 0, zIndex: 300,
         display: "flex", alignItems: "center", justifyContent: "center",

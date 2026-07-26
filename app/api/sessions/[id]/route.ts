@@ -128,7 +128,7 @@ export async function GET(
   try {
     const filePath = await resolveSessionPath(id);
     if (!filePath) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+      return NextResponse.json({ error: "Session not found", code: "session_not_found" }, { status: 404 });
     }
 
     const searchParams = new URL(req.url).searchParams;
@@ -140,7 +140,7 @@ export async function GET(
       skipToolResultImages: deferToolResultImages,
     });
     if (!header) {
-      return NextResponse.json({ error: "Session file is missing or malformed" }, { status: 404 });
+      return NextResponse.json({ error: "Session file is missing or malformed", code: "session_file_malformed" }, { status: 404 });
     }
     const leafId = getLeafEntryId(entries);
     const tree = projectTreeForResponse(buildSessionTree(entries));
@@ -191,11 +191,11 @@ export async function PATCH(
   try {
     const { name } = await req.json() as { name?: string };
     if (typeof name !== "string" || !name.trim()) {
-      return NextResponse.json({ error: "name is required" }, { status: 400 });
+      return NextResponse.json({ error: "name is required", code: "session_name_required" }, { status: 400 });
     }
     const filePath = await resolveSessionPath(id);
     if (!filePath) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+      return NextResponse.json({ error: "Session not found", code: "session_not_found" }, { status: 404 });
     }
 
     // A running omp process owns its session file; route the rename through it
@@ -229,7 +229,7 @@ export async function DELETE(
   try {
     const filePath = await resolveSessionPath(id);
     if (!filePath) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+      return NextResponse.json({ error: "Session not found", code: "session_not_found" }, { status: 404 });
     }
 
     // Read only the bounded header before deleting.

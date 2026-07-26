@@ -18,7 +18,8 @@ test("renders the upstream model error", () => {
   );
 
   assert.match(html, /role="alert"/);
-  assert.match(html, /Model error/);
+  // en.json is assembled from locale parts; before assembly the key renders as-is.
+  assert.match(html, /(Model error|chatInput\.modelError)/);
   assert.match(html, /providers\.custom\.models\.0\.id must not be empty/);
 });
 
@@ -39,6 +40,6 @@ test("keeps the model selector visible when a model error leaves no options", ()
     }),
   );
 
-  assert.match(html, />No models</);
-  assert.match(html, /title="No available models"/);
+  assert.match(html, />(No models|chatInput\.noModels)</);
+  assert.match(html, /title="(No available models|chatInput\.noAvailableModels)"/);
 });

@@ -3,6 +3,7 @@ import { registerAbortHandler } from "@/hooks/useKeyboardShortcuts";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { AgentMessage, AssistantContentBlock, AssistantMessage, BashExecutionMessage, CustomMessage, ExtensionUiRequest, SessionInfo, SessionTreeNode, ToolResultMessage } from "@/lib/types";
 import { normalizeCustomPanelLines, parseAnsiLine } from "@/lib/ansi";
+import { translate, useI18n } from "@/lib/i18n";
 import { asBracketedPaste, toTerminalKeyData } from "@/lib/terminal-input";
 import { countToolCallBlocks, getDisplayableAssistantBlocks, splitFinalAssistantBlocks } from "@/lib/message-display";
 import { MessageView } from "./MessageView";
@@ -39,15 +40,14 @@ interface Props {
 
 function phaseLabel(phase: AgentPhase): string {
   if (phase?.kind === "running_tools") {
-    const names = phase.tools.map((t) => t.name);
-    if (names.length === 0) return "Running tool...";
-    if (names.length === 1) return `Running ${names[0]}...`;
-    if (names.length <= 3) return `Running ${names.join(", ")}...`;
-    return `Running ${names.slice(0, 2).join(", ")} (+${names.length - 2})...`;
+    const names = phase.tools.map((tool) => tool.name);
+    if (names.length === 0) return translate("chatWindow.runningTool");
+    if (names.length <= 3) return translate("chatWindow.runningNamed", { names: names.join(", ") });
+    return translate("chatWindow.runningNamedMore", { names: names.slice(0, 2).join(", "), more: names.length - 2 });
   }
-  if (phase?.kind === "waiting_model") return "Waiting for model...";
-  if (phase?.kind === "running_command") return "Running command...";
-  return "Thinking...";
+  if (phase?.kind === "waiting_model") return translate("chatWindow.waitingModel");
+  if (phase?.kind === "running_command") return translate("chatWindow.runningCommand");
+  return translate("chatWindow.thinking");
 }
 
 const CHAT_MINIMAP_WIDTH = 36;
@@ -126,6 +126,7 @@ function withAssistantBlocks(
 }
 
 function OmpRuntimeVersion() {
+  const { t } = useI18n();
   const [version, setVersion] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -142,15 +143,16 @@ function OmpRuntimeVersion() {
   }, []);
   return (
     <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
-      omp <span style={{ color: "var(--text)" }}>{version ? `v${version}` : "not found"}</span>
+      omp <span style={{ color: "var(--text)" }}>{version ? `v${version}` : t("chatWindow.versionNotFound")}</span>
     </span>
   );
 }
 
 function ProcessDetailsGroup({ messageCount, toolCallCount, children }: { messageCount: number; toolCallCount: number; children: ReactNode }) {
+  const { t, tn } = useI18n();
   const [expanded, setExpanded] = useState(false);
-  const parts = ["Process details", `${messageCount} ${messageCount === 1 ? "message" : "messages"}`];
-  if (toolCallCount > 0) parts.push(`${toolCallCount} ${toolCallCount === 1 ? "tool call" : "tool calls"}`);
+  const parts = [t("chatWindow.processDetails"), tn("chatWindow.messageCount", messageCount)];
+  if (toolCallCount > 0) parts.push(tn("chatWindow.toolCallCount", toolCallCount));
 
   return (
     <div style={{ marginBottom: 14 }}>
@@ -172,7 +174,7 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, children }: { messag
           fontSize: 12,
           textAlign: "left",
         }}
-        title={expanded ? "Collapse process details" : "Expand process details"}
+        title={expanded ? t("chatWindow.collapseProcessDetails") : t("chatWindow.expandProcessDetails")}
       >
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, transform: expanded ? "rotate(90deg)" : "none", transition: "transform 0.15s" }}>
           <polyline points="4 2.5 7.5 6 4 9.5" />
@@ -191,6 +193,7 @@ function ProcessDetailsGroup({ messageCount, toolCallCount, children }: { messag
 }
 
 export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreated, onSessionForked, modelsRefreshKey, chatInputRef, onBranchDataChange, onSystemPromptChange, onSessionStatsChange, onSessionStatsPanelOpen, onContextUsageChange, onOpenFile }: Props) {
+  const { t } = useI18n();
   const { soundEnabled, onSoundToggle, playDoneSound, unlockAudio } = useAudio();
   const isMobile = useIsMobile();
 
@@ -397,7 +400,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center text-text-muted">
-        Loading session...
+        {t("chatWindow.loadingSession")}
       </div>
     );
   }
@@ -689,7 +692,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
                 <>
                   {hasMore && (
                     <div ref={sentinelRef} className="py-3 text-center text-xs text-text-muted">
-                      Scroll up to load earlier messages ({startIndex} hidden)
+                      {t("chatWindow.scrollUpToLoad", { count: startIndex })}
                     </div>
                   )}
                   {rendered.slice(startIndex)}
@@ -708,7 +711,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
 
             {bashRunning && !pendingBash && (
               <div className="py-2 text-[13px] text-text-muted">
-                <span className="animate-[pulse_1.5s_infinite]">Running command...</span>
+                <span className="animate-[pulse_1.5s_infinite]">{t("chatWindow.runningCommand")}</span>
               </div>
             )}
 
@@ -893,6 +896,7 @@ function ExtensionDialog({
   request: ExtensionDialogRequest;
   onRespond: (request: ExtensionDialogRequest, response: { value: string } | { confirmed: boolean } | { cancelled: true }) => void;
 }) {
+  const { t } = useI18n();
   const [value, setValue] = useState(request.method === "editor" ? request.prefill ?? "" : "");
 
   useEffect(() => {
@@ -934,7 +938,7 @@ function ExtensionDialog({
       >
         <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--border)" }}>
           <div style={{ color: "var(--text)", fontSize: 14, fontWeight: 650 }}>{request.title}</div>
-          <div style={{ marginTop: 3, color: "var(--text-dim)", fontSize: 11, fontFamily: "var(--font-mono)" }}>extension request</div>
+          <div style={{ marginTop: 3, color: "var(--text-dim)", fontSize: 11, fontFamily: "var(--font-mono)" }}>{t("chatWindow.extensionRequest")}</div>
         </div>
 
         <div style={{ padding: 14 }}>
@@ -1025,7 +1029,7 @@ function ExtensionDialog({
               cursor: "pointer",
             }}
           >
-            Cancel
+            {t("chatWindow.cancel")}
           </button>
           {request.method === "confirm" ? (
             <button
@@ -1039,7 +1043,7 @@ function ExtensionDialog({
                 cursor: "pointer",
               }}
             >
-              Confirm
+              {t("chatWindow.confirm")}
             </button>
           ) : request.method !== "select" ? (
             <button
@@ -1053,7 +1057,7 @@ function ExtensionDialog({
                 cursor: "pointer",
               }}
             >
-              Submit
+              {t("chatWindow.submit")}
             </button>
           ) : null}
         </div>
@@ -1079,6 +1083,7 @@ function ExtensionCustomPanel({
   request: ExtensionCustomRequest;
   onInput: (request: ExtensionCustomRequest, data: string) => void;
 }) {
+  const { t } = useI18n();
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const composingRef = useRef(false);
   const displayLines = normalizeCustomPanelLines(request.lines);
@@ -1120,7 +1125,7 @@ function ExtensionCustomPanel({
       >
         <textarea
           ref={inputRef}
-          aria-label="Extension terminal input"
+          aria-label={t("chatWindow.extensionTerminalInput")}
           autoCapitalize="off"
           autoComplete="off"
           autoCorrect="off"
@@ -1167,7 +1172,7 @@ function ExtensionCustomPanel({
           }}
         />
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "10px 12px", borderBottom: "1px solid var(--border)" }}>
-          <div style={{ color: "var(--text)", fontSize: 13, fontWeight: 650 }}>Extension panel</div>
+          <div style={{ color: "var(--text)", fontSize: 13, fontWeight: 650 }}>{t("chatWindow.extensionPanel")}</div>
           <button
             onClick={() => onInput(request, "\x03")}
             style={{
@@ -1180,7 +1185,7 @@ function ExtensionCustomPanel({
               fontSize: 12,
             }}
           >
-            Close
+            {t("chatWindow.close")}
           </button>
         </div>
         <pre

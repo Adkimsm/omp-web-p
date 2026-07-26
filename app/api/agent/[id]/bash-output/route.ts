@@ -24,20 +24,20 @@ export async function GET(
     path = url.searchParams.get("path");
     download = url.searchParams.get("download") === "1";
   } catch {
-    return NextResponse.json({ error: "invalid url" }, { status: 400 });
+    return NextResponse.json({ error: "invalid url", code: "invalid_request" }, { status: 400 });
   }
 
   if (!path) {
-    return NextResponse.json({ error: "path required" }, { status: 400 });
+    return NextResponse.json({ error: "path required", code: "path_required" }, { status: 400 });
   }
 
   const resolved = resolveBashOutputPath(path, tmpdir());
   if (!resolved) {
-    return NextResponse.json({ error: "invalid path" }, { status: 400 });
+    return NextResponse.json({ error: "invalid path", code: "invalid_path" }, { status: 400 });
   }
 
   if (!await isBashOutputPathReferencedBySession(resolved, id)) {
-    return NextResponse.json({ error: "forbidden" }, { status: 403 });
+    return NextResponse.json({ error: "forbidden", code: "access_denied" }, { status: 403 });
   }
 
   try {
@@ -57,11 +57,12 @@ export async function GET(
     if (result.tooLarge) {
       return NextResponse.json({
         error: `Full output is too large to display (limit ${MAX_INLINE_BASH_OUTPUT_BYTES} bytes)`,
+        code: "bash_output_too_large",
         data: { size: result.size, maxBytes: MAX_INLINE_BASH_OUTPUT_BYTES },
       }, { status: 413 });
     }
     return NextResponse.json({ success: true, data: { output: result.content } });
   } catch {
-    return NextResponse.json({ error: "full output unavailable" }, { status: 404 });
+    return NextResponse.json({ error: "full output unavailable", code: "bash_output_unavailable" }, { status: 404 });
   }
 }

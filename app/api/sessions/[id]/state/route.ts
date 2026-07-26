@@ -9,7 +9,7 @@ export async function GET(
   const { id } = await params;
   try {
     if (!await resolveSessionPath(id)) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+      return NextResponse.json({ error: "Session not found", code: "session_not_found" }, { status: 404 });
     }
 
     const rpc = getRpcSession(id);

@@ -17,10 +17,10 @@ export async function POST(req: Request) {
     const { cwd, ...command } = body;
 
     if (!cwd || typeof cwd !== "string") {
-      return NextResponse.json({ error: "cwd is required" }, { status: 400 });
+      return NextResponse.json({ error: "cwd is required", code: "cwd_required" }, { status: 400 });
     }
     if (!existsSync(cwd)) {
-      return NextResponse.json({ error: `Directory does not exist: ${cwd}` }, { status: 400 });
+      return NextResponse.json({ error: `Directory does not exist: ${cwd}`, code: "directory_not_found" }, { status: 400 });
     }
 
     // Use a one-time key so startRpcSession's lock doesn't conflict with real session ids

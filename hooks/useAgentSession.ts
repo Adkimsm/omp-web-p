@@ -11,6 +11,7 @@ import type {
 } from "@/lib/types";
 import { normalizeToolCalls } from "@/lib/normalize";
 import { sendAgentCommand } from "@/lib/agent-client";
+import { translate } from "@/lib/i18n";
 import { getToolNamesForPreset } from "@/lib/tool-presets";
 import type { RpcAvailableSlashCommand, SessionStatsInfo } from "@/lib/pi-types";
 
@@ -188,8 +189,8 @@ type EventStreamConnectionResult = {
 class EventStreamConnectionError extends Error {
   constructor(public readonly status: Exclude<EventStreamConnectionStatus, "connected">) {
     super(status === "timeout"
-      ? "Timed out connecting to the agent event stream. Please try again."
-      : "Failed to connect to the agent event stream. Please try again.");
+      ? translate("agentSession.eventStreamTimeout")
+      : translate("agentSession.eventStreamFailed"));
     this.name = "EventStreamConnectionError";
   }
 }
@@ -544,7 +545,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // (mount, /reload) need no changes.
   const loadTools = useCallback(async (_sid: string) => {}, []);
 
-  const promoteNewSession = useCallback((messageCount = 0, firstMessage = "(no messages)") => {
+  const promoteNewSession = useCallback((messageCount = 0, firstMessage?: string) => {
+    firstMessage ??= translate("agentSession.noMessages");
     const sid = sessionIdRef.current;
     if (!isNew || !newSessionCwd || !sid || newSessionPromotedRef.current) return;
     newSessionPromotedRef.current = true;
@@ -741,7 +743,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         addNotice({
           id: request.id,
           type: "info",
-          message: request.instructions ? `${request.instructions}\n${url}` : `Open in your browser: ${url}`,
+          message: request.instructions ? `${request.instructions}\n${url}` : translate("agentSession.openInBrowser", { url }),
         });
         break;
       }
@@ -976,7 +978,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         void finishPromptWithoutStream(sessionIdRef.current);
         break;
       case "prompt_error":
-        addNotice({ type: "error", message: (event.errorMessage as string | undefined) ?? "Command failed" });
+        addNotice({ type: "error", message: (event.errorMessage as string | undefined) ?? translate("agentSession.commandFailed") });
         break;
       case "notice": {
         const level = event.level as string | undefined;
@@ -1202,7 +1204,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     setBashRunning(true);
     try {
       const sid = sessionIdRef.current ?? session?.id ?? await ensureNewSession();
-      if (!sid) throw new Error("Unable to create a session for the shell command");
+      if (!sid) throw new Error(translate("agentSession.shellSessionFailed"));
       await sendAgentCommand(sid, {
         type: "bash",
         command,
@@ -1355,7 +1357,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       if (result.error) {
         addNotice({ type: "error", message: result.error });
       } else if (result.action !== "openSessionStats") {
-        addNotice({ type: "success", message: result.message ?? "Command completed" });
+        addNotice({ type: "success", message: result.message ?? translate("agentSession.commandCompleted") });
       }
       return result;
     };
@@ -1363,7 +1365,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     try {
       switch (commandName) {
         case "compact": {
-          if (!sid || isCompacting) return complete({ handled: true, error: "No active session to compact" });
+          if (!sid || isCompacting) return complete({ handled: true, error: translate("agentSession.noSessionToCompact") });
           setIsCompacting(true);
           setCompactError(null);
           setCompactResult(null);
@@ -1373,11 +1375,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           });
           setCompactResult(readCompactResult(result, "manual"));
           if (await loadSession(sid, true)) promoteNewSession();
-          return complete({ handled: true, message: "Compacted context" });
+          return complete({ handled: true, message: translate("agentSession.compactedContext") });
         }
 
         case "reload": {
-          if (!sid) return complete({ handled: true, error: "No active session to reload" });
+          if (!sid) return complete({ handled: true, error: translate("agentSession.noSessionToReload") });
           await sendAgentCommand(sid, { type: "reload" });
           await Promise.all([
             loadSession(sid, false, true),
@@ -1385,19 +1387,19 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
             loadSlashCommands(),
             loadModels(),
           ]);
-          return complete({ handled: true, message: "Reloaded session resources" });
+          return complete({ handled: true, message: translate("agentSession.reloadedResources") });
         }
 
         case "name": {
-          if (!sid) return complete({ handled: true, error: "No active session to name" });
-          if (!args) return complete({ handled: true, error: "Usage: /name <name>" });
+          if (!sid) return complete({ handled: true, error: translate("agentSession.noSessionToName") });
+          if (!args) return complete({ handled: true, error: translate("agentSession.nameUsage") });
           await sendAgentCommand(sid, { type: "set_session_name", name: args });
           if (await loadSession(sid)) promoteNewSession();
-          return complete({ handled: true, message: `Session renamed to ${args}` });
+          return complete({ handled: true, message: translate("agentSession.sessionRenamed", { name: args }) });
         }
 
         case "session": {
-          if (!sid) return complete({ handled: true, error: "No active session" });
+          if (!sid) return complete({ handled: true, error: translate("agentSession.noActiveSession") });
           const stats = await sendAgentCommand<SessionStatsInfo>(sid, { type: "get_session_stats" });
           if (stats) {
             setSessionStatsOverride(stats);
@@ -1407,12 +1409,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         }
 
         case "copy": {
-          if (!sid) return complete({ handled: true, error: "No active session" });
+          if (!sid) return complete({ handled: true, error: translate("agentSession.noActiveSession") });
           const data = await sendAgentCommand<LastAssistantTextResponse>(sid, { type: "get_last_assistant_text" });
           const textToCopy = data?.text ?? "";
-          if (!textToCopy) return complete({ handled: true, error: "No assistant message to copy" });
+          if (!textToCopy) return complete({ handled: true, error: translate("agentSession.noMessageToCopy") });
           await navigator.clipboard.writeText(textToCopy);
-          return complete({ handled: true, message: "Copied last assistant message" });
+          return complete({ handled: true, message: translate("agentSession.copiedLastMessage") });
         }
 
         default:
@@ -1519,7 +1521,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     // RPC protocol cannot change the toolset of an already-running session.
     const sid = sessionIdRef.current ?? await ensuringNewSessionRef.current;
     if (sid) {
-      addNotice({ type: "info", message: "Tool presets apply when a session starts; this session keeps its current tools." });
+      addNotice({ type: "info", message: translate("agentSession.toolPresetNotice") });
     }
   }, [setToolPresetState, addNotice]);
 

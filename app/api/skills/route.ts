@@ -12,12 +12,12 @@ export const dynamic = "force-dynamic";
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const cwd = searchParams.get("cwd");
-  if (!cwd) return NextResponse.json({ error: "cwd required" }, { status: 400 });
+  if (!cwd) return NextResponse.json({ error: "cwd required", code: "cwd_required" }, { status: 400 });
 
   try {
     const allowedRoots = await getAllowedFileRoots();
     if (!isExistingFilePathAllowed(cwd, allowedRoots)) {
-      return NextResponse.json({ error: "Access denied" }, { status: 403 });
+      return NextResponse.json({ error: "Access denied", code: "access_denied" }, { status: 403 });
     }
     return NextResponse.json(await loadSkillsWithInstallInfo(cwd));
   } catch (e) {
@@ -30,12 +30,12 @@ export async function PATCH(req: Request) {
   try {
     const body = await req.json() as { filePath: string; disableModelInvocation: boolean };
     const { filePath, disableModelInvocation } = body;
-    if (!filePath) return NextResponse.json({ error: "filePath required" }, { status: 400 });
-    if (!existsSync(filePath)) return NextResponse.json({ error: "file not found" }, { status: 404 });
+    if (!filePath) return NextResponse.json({ error: "filePath required", code: "file_path_required" }, { status: 400 });
+    if (!existsSync(filePath)) return NextResponse.json({ error: "file not found", code: "file_not_found" }, { status: 404 });
     const allowedRoots = new Set(await getAllowedFileRoots());
     allowedRoots.add(getAgentDir());
     if (!isExistingFilePathAllowed(filePath, allowedRoots)) {
-      return NextResponse.json({ error: "Access denied" }, { status: 403 });
+      return NextResponse.json({ error: "Access denied", code: "access_denied" }, { status: 403 });
     }
 
     const content = readFileSync(filePath, "utf8");

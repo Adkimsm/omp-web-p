@@ -30,12 +30,12 @@ export async function POST(req: Request) {
   try {
     const body = await req.json() as { providerName?: unknown; provider?: unknown; model?: unknown };
     const providerName = typeof body.providerName === "string" ? body.providerName.trim() : "";
-    if (!providerName) return NextResponse.json({ ok: false, error: "providerName is required" }, { status: 400 });
-    if (!isRecord(body.provider)) return NextResponse.json({ ok: false, error: "provider is required" }, { status: 400 });
-    if (!isRecord(body.model)) return NextResponse.json({ ok: false, error: "model is required" }, { status: 400 });
+    if (!providerName) return NextResponse.json({ ok: false, error: "providerName is required", code: "provider_name_required" }, { status: 400 });
+    if (!isRecord(body.provider)) return NextResponse.json({ ok: false, error: "provider is required", code: "provider_required" }, { status: 400 });
+    if (!isRecord(body.model)) return NextResponse.json({ ok: false, error: "model is required", code: "model_required" }, { status: 400 });
 
     const modelId = typeof body.model.id === "string" ? body.model.id.trim() : "";
-    if (!modelId) return NextResponse.json({ ok: false, error: "Model ID is required" }, { status: 400 });
+    if (!modelId) return NextResponse.json({ ok: false, error: "Model ID is required", code: "model_id_required" }, { status: 400 });
 
     const config = {
       providers: {
@@ -72,6 +72,7 @@ export async function POST(req: Request) {
       return NextResponse.json({
         ok: false,
         error: `Model ${providerName}/${modelId} did not resolve — check the API key and provider config`,
+        code: "model_test_unresolved",
         latencyMs,
       });
     }

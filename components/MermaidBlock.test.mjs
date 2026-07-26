@@ -20,7 +20,8 @@ test("MermaidBlock renders source by default", () => {
     React.createElement(MermaidBlock, { code: mermaidSrc }),
   );
 
-  assert.match(html, />Preview</);
+  // en.json is assembled from locale parts; before assembly the key renders as-is.
+  assert.match(html, />(Preview|mermaidBlock\.preview)</);
   assert.match(html, /Alice/);
   assert.doesNotMatch(html, /mermaid-block-loading/);
 });
@@ -30,7 +31,7 @@ test("MermaidBlock can render preview by default", () => {
     React.createElement(MermaidBlock, { code: mermaidSrc, defaultPreview: true }),
   );
 
-  assert.match(html, />Source</);
+  assert.match(html, />(Source|mermaidBlock\.source)</);
   assert.match(html, /mermaid-block-loading/);
   assert.doesNotMatch(html, /Alice/);
 });
@@ -41,7 +42,7 @@ test("MermaidBlock with isStreaming falls back to source view", () => {
   );
 
   assert.match(html, /disabled/);
-  assert.match(html, />Preview</);
+  assert.match(html, />(Preview|mermaidBlock\.preview)</);
   assert.match(html, /Alice/);
   assert.match(html, /-&gt;&gt;/);
 });

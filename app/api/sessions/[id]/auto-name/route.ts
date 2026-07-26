@@ -21,7 +21,7 @@ export async function POST(
   try {
     const filePath = await resolveSessionPath(id);
     if (!filePath) {
-      return NextResponse.json({ error: "Session not found" }, { status: 404 });
+      return NextResponse.json({ error: "Session not found", code: "session_not_found" }, { status: 404 });
     }
 
     // Running session: ask the live omp process (its in-memory title is newer
@@ -50,7 +50,7 @@ export async function POST(
     const derived = deriveSessionTitleFromFirstMessage(info?.firstMessage);
     if (!derived) {
       return NextResponse.json(
-        { error: "The session has no user messages to name" },
+        { error: "The session has no user messages to name", code: "session_no_messages_to_name" },
         { status: 409 },
       );
     }
