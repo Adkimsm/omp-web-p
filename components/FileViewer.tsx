@@ -9,6 +9,7 @@ import {
   vscDarkPlus,
 } from "@/lib/syntax-highlight";
 import ReactMarkdown from "react-markdown";
+import { AtSign, Download, WrapText } from "lucide-react";
 import { useTheme } from "@/hooks/useTheme";
 import {
   DOCX_PREVIEW_MAX_BYTES,
@@ -22,6 +23,7 @@ import { translate, useI18n } from "@/lib/i18n";
 import { resolveLocalFileHref } from "@/lib/file-links";
 import { normalizeDisplayMath, useMarkdownPlugins } from "@/lib/markdown";
 import { CodeBlock, MermaidBlock } from "./MermaidBlock";
+import { Tooltip } from "./ui/primitives";
 import { parseUnifiedPatch } from "@/lib/patch";
 import type { GitFileDiffResponse } from "@/lib/git-types";
 
@@ -79,15 +81,6 @@ type SourceCodeRendererProps = Parameters<NonNullable<SyntaxHighlighterProps["re
 interface SelectedLineRange {
   startLine: number;
   endLine: number;
-}
-
-function MentionIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="12" cy="12" r="4" />
-      <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8" />
-    </svg>
-  );
 }
 
 function closestSourceLine(node: Node): HTMLElement | null {
@@ -208,20 +201,22 @@ function getFileApiUrl(
 
 function DownloadLink({ filePath, sourceSessionId }: { filePath: string; sourceSessionId?: string | null }) {
   const { t } = useI18n();
+  const label = t("fileViewer.downloadFile");
   return (
-    <a
-      href={getFileApiUrl(filePath, "download", sourceSessionId)}
-      download={getFileName(filePath)}
-      title={t("fileViewer.downloadFile")}
-      aria-label={t("fileViewer.downloadFile")}
-      className="file-viewer-icon-button"
-    >
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-        <polyline points="7 10 12 15 17 10" />
-        <line x1="12" y1="15" x2="12" y2="3" />
-      </svg>
-    </a>
+    <Tooltip content={label}>
+      <a
+        href={getFileApiUrl(filePath, "download", sourceSessionId)}
+        download={getFileName(filePath)}
+        aria-label={label}
+        className="file-viewer-icon-button"
+        style={{
+          borderRadius: "var(--radius-control)",
+          transition: `background var(--dur-fast) var(--ease-out-warm), color var(--dur-fast) var(--ease-out-warm)`,
+        }}
+      >
+        <Download size={14} strokeWidth={2.2} aria-hidden="true" />
+      </a>
+    </Tooltip>
   );
 }
 
@@ -988,6 +983,10 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onMentionL
     ...(hasGitDiff ? ["diff" as const] : []),
   ];
   const metadata = t("fileViewer.metadata", { language: data.language, lines: lines.length, size: formatSize(data.size) });
+  const fullRelativePath = getRelativeFilePath(filePath, cwd);
+  const pathSepIndex = fullRelativePath.lastIndexOf("/");
+  const breadcrumbDir = pathSepIndex >= 0 ? fullRelativePath.slice(0, pathSepIndex + 1) : "";
+  const breadcrumbFile = pathSepIndex >= 0 ? fullRelativePath.slice(pathSepIndex + 1) : fullRelativePath;
 
   return (
     <div className="file-viewer-shell" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
@@ -1005,8 +1004,11 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onMentionL
           flexShrink: 0,
         }}
       >
-        <span className="file-viewer-path" style={{ fontFamily: "var(--font-mono)" }} title={filePath}>
-          {getRelativeFilePath(filePath, cwd)}
+        <span className="file-viewer-path" style={{ fontFamily: "var(--font-mono)" }} title={fullRelativePath}>
+          {breadcrumbDir && (
+            <span style={{ color: "var(--text-muted)" }}>{breadcrumbDir}</span>
+          )}
+          <span className="display-serif" style={{ color: "var(--text)", fontWeight: 600, letterSpacing: "0.005em" }}>{breadcrumbFile}</span>
         </span>
 
         <span className="file-viewer-meta" title={metadata}>{metadata}</span>
@@ -1022,20 +1024,30 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onMentionL
 
         <div className="file-viewer-controls">
           {displayModes.length > 1 && (
-            <div className="file-viewer-mode-switch" aria-label={t("fileViewer.viewMode")}>
+            <div
+              className="file-viewer-mode-switch"
+              aria-label={t("fileViewer.viewMode")}
+              style={{
+                borderRadius: "var(--radius-control)",
+                overflow: "hidden",
+              }}
+            >
               {displayModes.map((mode) => {
                 const active = displayMode === mode;
+                const label = mode === "diff" ? t("fileViewer.compareWithHead") : t(DISPLAY_MODE_LABEL_KEYS[mode]);
                 return (
                   <button
                     key={mode}
                     type="button"
                     onClick={() => setDisplayMode(mode)}
-                    title={mode === "diff" ? t("fileViewer.compareWithHead") : undefined}
+                    aria-label={label}
+                    title={label}
                     aria-pressed={active}
                     className="file-viewer-mode-button"
                     style={{
                       background: active ? "var(--bg-selected)" : "transparent",
                       color: active ? "var(--text)" : "var(--text-muted)",
+                      transition: `background var(--dur-fast) var(--ease-out-warm), color var(--dur-fast) var(--ease-out-warm)`,
                     }}
                   >
                     {t(DISPLAY_MODE_LABEL_KEYS[mode])}
@@ -1048,36 +1060,39 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onMentionL
           <div className="file-viewer-actions">
             {displayMode === "source" && (
               <>
-                <button
-                  type="button"
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={handleMentionSelectedLines}
-                  title={t("fileViewer.mentionSelectedLines")}
-                  aria-label={t("fileViewer.mentionSelectedLines")}
-                  disabled={!selectedLineRange}
-                  className="file-viewer-icon-button"
-                >
-                  <MentionIcon />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setWrapLines((value) => !value)}
-                  title={wrapLines ? t("fileViewer.disableWordWrap") : t("fileViewer.enableWordWrap")}
-                  aria-label={wrapLines ? t("fileViewer.disableWordWrap") : t("fileViewer.enableWordWrap")}
-                  aria-pressed={wrapLines}
-                  className="file-viewer-icon-button"
-                  style={{
-                    background: wrapLines ? "var(--bg-selected)" : "transparent",
-                    color: wrapLines ? "var(--text)" : "var(--text-muted)",
-                  }}
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <path d="M3 6h18" />
-                    <path d="M3 12h15a3 3 0 1 1 0 6h-4" />
-                    <path d="m16 16-2 2 2 2" />
-                    <path d="M3 18h7" />
-                  </svg>
-                </button>
+                <Tooltip content={t("fileViewer.mentionSelectedLines")}>
+                  <button
+                    type="button"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={handleMentionSelectedLines}
+                    aria-label={t("fileViewer.mentionSelectedLines")}
+                    disabled={!selectedLineRange}
+                    className="file-viewer-icon-button"
+                    style={{
+                      borderRadius: "var(--radius-control)",
+                      transition: `background var(--dur-fast) var(--ease-out-warm), color var(--dur-fast) var(--ease-out-warm)`,
+                    }}
+                  >
+                    <AtSign size={14} strokeWidth={2.2} aria-hidden="true" />
+                  </button>
+                </Tooltip>
+                <Tooltip content={wrapLines ? t("fileViewer.disableWordWrap") : t("fileViewer.enableWordWrap")}>
+                  <button
+                    type="button"
+                    onClick={() => setWrapLines((value) => !value)}
+                    aria-label={wrapLines ? t("fileViewer.disableWordWrap") : t("fileViewer.enableWordWrap")}
+                    aria-pressed={wrapLines}
+                    className="file-viewer-icon-button"
+                    style={{
+                      background: wrapLines ? "var(--bg-selected)" : "transparent",
+                      color: wrapLines ? "var(--text)" : "var(--text-muted)",
+                      borderRadius: "var(--radius-control)",
+                      transition: `background var(--dur-fast) var(--ease-out-warm), color var(--dur-fast) var(--ease-out-warm)`,
+                    }}
+                  >
+                    <WrapText size={14} strokeWidth={2} aria-hidden="true" />
+                  </button>
+                </Tooltip>
               </>
             )}
           </div>
