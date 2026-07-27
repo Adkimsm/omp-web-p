@@ -82,11 +82,27 @@ The local dev server runs at [http://127.0.0.1:30177](http://127.0.0.1:30177).
 Common checks:
 
 ```bash
-node_modules/.bin/tsc --noEmit
-npm run lint
+npx tsc --noEmit       # type check
+npm run lint           # ESLint (zero warnings enforced)
+node --test lib/*.test.mjs components/*.test.mjs   # run test suite
 ```
 
 Avoid running `next build` / `npm run build` during local development. It writes to `.next/` and can interfere with the dev server; leave builds for release work.
+
+## Internationalization
+
+omp-web supports English, Simplified Chinese (简体中文), and Japanese (日本語) with 633+ translated strings covering the entire UI. The language is auto-detected from `navigator.language` and can be switched at runtime via the language menu in the top bar. The choice persists across sessions.
+
+- Dictionaries: `lib/i18n/locales/{en,zh-CN,ja}.json`
+- Framework: `lib/i18n/index.tsx` — a lightweight store built on `useSyncExternalStore` with `{var}` interpolation and plural support (`.one`/`.other`)
+- API error messages are translated via stable error codes (`errors.<code>`) looked up client-side
+
+## Quality
+
+- **Accessibility**: WCAG AA compliant — Lighthouse a11y score 100/100, keyboard navigation throughout, focus-visible rings, ARIA roles
+- **Performance**: memoized list components, RAF-gated scroll/mouse handlers, debounced search, streaming JSONL reader, ETag-cached session listing
+- **Resilience**: graceful shutdown of spawned omp processes (process-group kill), error boundaries, atomic session file rewrites
+- **Tests**: 166 unit tests across session parsing, terminal input, markdown rendering, and message display
 
 ## Credits
 
