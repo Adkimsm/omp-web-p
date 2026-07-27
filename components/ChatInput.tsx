@@ -1929,7 +1929,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                   onClick={() => !isStreaming && setThinkingDropdownOpen((v) => !v)}
                   disabled={isStreaming}
                   title={t("chatInput.changeReasoningTitle", { level: thinkingDisplayLabel })}
-                  aria-label={t("chatInput.changeReasoning")}
+                  aria-label={`${t("chatInput.changeReasoning")}: ${thinkingDisplayLabel}`}
                   style={{
                     display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
                     padding: isMobile ? "0 6px" : "8px 12px",
@@ -2013,7 +2013,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                   onClick={() => !isStreaming && setToolDropdownOpen((v) => !v)}
                   disabled={isStreaming}
                   title={t("chatInput.changeToolPresetTitle", { preset: toolPresetLabel })}
-                  aria-label={t("chatInput.changeToolPreset")}
+                  aria-label={`${t("chatInput.changeToolPreset")}: ${toolPresetLabel}`}
                   style={{
                     display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
                     padding: isMobile ? "0 6px" : "8px 12px",

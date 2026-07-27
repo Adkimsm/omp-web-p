@@ -665,7 +665,7 @@ export function AppShell() {
       </div>
 
       {/* Center: chat */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
+      <main style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
         {/* Top bar with sidebar toggle */}
         <div ref={topBarRef} style={{ display: "flex", alignItems: "center", flexShrink: 0, borderBottom: "1px solid var(--border)", height: 36, background: "var(--bg-panel)" }}>
           <button
@@ -1265,7 +1265,7 @@ export function AppShell() {
             )
           ) : null}
         </div>
-      </div>
+      </main>
 
       {/* Right panel: file viewer — always mounted, width animated via CSS */}
       <div

@@ -26,10 +26,11 @@
   --bg-selected: #e8e8e8;
   --border: #e0e0e0;
   --text: #1a1a1a;
-  /* WCAG AA: 5.01:1 on --bg, 4.59:1 on --bg-panel (both pass 4.5:1). */
-  --text-muted: #67707e;
-  /* WCAG AA: 5.02:1 on --bg, 4.60:1 on --bg-panel; must be lighter than --text-muted. */
-  --text-dim: #66707e;
+  /* WCAG AA: 6.21:1 on --bg, 5.79:1 on --bg-panel, 5.35:1 on --bg-hover (all pass
+     4.5:1 even for small text; #67707e failed at 4.31 on hover backgrounds). */
+  --text-muted: #58626d;
+  /* WCAG AA: 6.50:1 on --bg, 6.07:1 on --bg-panel; slightly darker than --text-muted. */
+  --text-dim: #555f6a;
   --accent: #2563eb;
   /* Filled buttons with white text: #2563eb gives white-on-fill 5.17:1 (passes AA).
      Mirrors --accent here since light accent already passes for both uses. */
