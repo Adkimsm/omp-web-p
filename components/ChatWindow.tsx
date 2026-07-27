@@ -223,7 +223,7 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
     retryInfo, contextUsage, forkingEntryId,
     isCompacting, compactError, compactResult, displayModel: displayModelValue, sessionStats,
     slashCommands, slashCommandsLoading, queuedMessages,
-    notices, extensionDialog, extensionStatuses, extensionWidgets, respondToExtensionUi,
+    notices, extensionDialog, extensionCustomUi, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput,
     isAutoModelSelection,
     agentPhase,
     activeSubagentCount, currentTodoPhase,
@@ -458,6 +458,13 @@ export function ChatWindow({ session, newSessionCwd, onAgentEnd, onSessionCreate
         <ExtensionDialog
           request={extensionDialog}
           onRespond={respondToExtensionUi}
+        />
+      )}
+
+      {extensionCustomUi && (
+        <ExtensionCustomPanel
+          request={extensionCustomUi}
+          onInput={sendExtensionCustomInput}
         />
       )}
 

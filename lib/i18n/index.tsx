@@ -111,12 +111,14 @@ export function useI18n() {
     (key: string, vars?: Record<string, string | number>) => translate(key, vars),
     // translate() reads module state that only changes with `locale`; depending
     // on it keeps memoized consumers re-translating on switch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [locale],
   );
 
   const tn = useCallback(
     (key: string, count: number, vars?: Record<string, string | number>) =>
       translatePlural(key, count, vars),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [locale],
   );
 

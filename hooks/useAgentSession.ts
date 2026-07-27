@@ -157,6 +157,7 @@ function normalizeThinkingLevel(level: string | undefined): ThinkingLevelOption 
 }
 
 type ExtensionUiDialogRequest = Extract<ExtensionUiRequest, { method: "select" | "confirm" | "input" | "editor" }>;
+type ExtensionUiCustomRequest = Extract<ExtensionUiRequest, { method: "custom" }>;
 // omp's rpc-ui frames add open_url (OAuth) and cancel on top of lib/types' union.
 type IncomingExtensionUiRequest =
   | ExtensionUiRequest
@@ -460,6 +461,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [noticeState, dispatchNotice] = useReducer(noticeReducer, { visible: [], pending: [] });
   const [sessionStatsOverride, setSessionStatsOverride] = useState<SessionStatsInfo | null>(null);
   const [extensionDialog, setExtensionDialog] = useState<ExtensionUiDialogRequest | null>(null);
+  const [extensionCustomUi, setExtensionCustomUi] = useState<ExtensionUiCustomRequest | null>(null);
   const [extensionStatuses, setExtensionStatuses] = useState<ExtensionStatusItem[]>([]);
   const [extensionWidgets, setExtensionWidgets] = useState<ExtensionWidgetItem[]>([]);
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessages>({ steering: [], followUp: [] });
@@ -636,7 +638,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   // omp's RPC protocol has no per-session tool listing; the preset shown for a
   // resumed session stays at its default. Kept as an exported no-op so callers
   // (mount, /reload) need no changes.
-  const loadTools = useCallback(async (_sid: string) => {}, []);
+  const loadTools = useCallback(async (_sid: string) => { void _sid; }, []);
 
   const promoteNewSession = useCallback((messageCount = 0, firstMessage?: string) => {
     firstMessage ??= translate("agentSession.noMessages");
@@ -787,6 +789,20 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, []);
 
+  const sendExtensionCustomInput = useCallback(async (request: ExtensionUiCustomRequest, data: string) => {
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+    try {
+      await sendAgentCommand(sid, {
+        type: "extension_ui_input",
+        id: request.id,
+        data,
+      });
+    } catch (e) {
+      console.error("Failed to send extension custom UI input:", e);
+    }
+  }, []);
+
   const addNotice = useCallback((notice: { id?: string; message: string; type?: NoticeType }) => {
     const message = notice.message.trim();
     if (!message) return;
@@ -878,6 +894,12 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         break;
       case "set_editor_text":
         opts.chatInputRef?.current?.insertText(request.text);
+        break;
+      case "custom":
+        setExtensionCustomUi((current) => {
+          if (request.closed) return current?.id === request.id ? null : current;
+          return request as ExtensionUiCustomRequest;
+        });
         break;
     }
   }, [addNotice, opts.chatInputRef]);
@@ -1851,7 +1873,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     retryInfo, contextUsage, systemPrompt, forkingEntryId,
     isCompacting, compactError, compactResult, currentModel, displayModel, sessionStats,
     slashCommands, slashCommandsLoading, queuedMessages,
-    notices: noticeState.visible, extensionDialog, extensionStatuses, extensionWidgets, respondToExtensionUi,
+    notices: noticeState.visible, extensionDialog, extensionCustomUi, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput,
     isAutoModelSelection: isNew && newSessionModel === null,
     agentPhase,
     activeSubagentCount, currentTodoPhase,
