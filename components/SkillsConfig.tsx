@@ -2,9 +2,14 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import { useModalDialog } from "@/hooks/useModalDialog";
 import { translate, useI18n } from "@/lib/i18n";
 import { formatApiError } from "@/lib/i18n/api-error";
+import {
+  Dialog,
+  DialogContent,
+} from "@/components/ui/primitives";
+import { toast } from "@/components/ui/toast";
+import { Plus } from "lucide-react";
 import type {
   SkillInfo as Skill,
   SkillInstallScope,
@@ -700,7 +705,6 @@ export function SkillsConfig({
 }) {
   const isMobile = useIsMobile();
   const { t, tn } = useI18n();
-  const dialogRef = useModalDialog<HTMLDivElement>({ onClose });
   const [skills, setSkills] = useState<Skill[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -842,7 +846,9 @@ export function SkillsConfig({
       });
       const d = (await res.json()) as { success?: boolean; error?: string };
       if (!res.ok || d.error) {
-        setSaveError(d.error ?? `HTTP ${res.status}`);
+        const msg = d.error ?? `HTTP ${res.status}`;
+        setSaveError(msg);
+        toast.error(t("skillsConfig.toggleErrorTitle"), msg);
         return;
       }
       setSkills((prev) =>
@@ -852,8 +858,11 @@ export function SkillsConfig({
             : s,
         ),
       );
+      toast.success(t("skillsConfig.toggleSuccessTitle"));
     } catch (e) {
-      setSaveError(String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setSaveError(msg);
+      toast.error(t("skillsConfig.toggleErrorTitle"), msg);
     } finally {
       setToggling((s) => {
         const n = new Set(s);
@@ -861,44 +870,23 @@ export function SkillsConfig({
         return n;
       });
     }
-  }, []);
+  }, [t]);
 
   const selectedSkill = skills.find((s) => s.filePath === selected) ?? null;
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 1000,
-        background: "rgba(0,0,0,0.35)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-      }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="skills-config-title"
-        tabIndex={-1}
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent
+        ariaLabel={t("skillsConfig.title")}
         style={{
           width: isMobile ? "calc(100vw - 16px)" : 860,
           maxWidth: "calc(100vw - 16px)",
           height: isMobile ? "calc(100dvh - 16px)" : "78vh",
           maxHeight: "calc(100dvh - 16px)",
-          background: "var(--bg)",
-          border: "1px solid var(--border)",
-          borderRadius: 10,
+          padding: 0,
           display: "flex",
           flexDirection: "column",
-          boxShadow: "0 8px 32px rgba(0,0,0,0.18)",
           overflow: "hidden",
-          outline: "none",
         }}
       >
         {/* Header */}
@@ -1151,6 +1139,14 @@ export function SkillsConfig({
             >
               <div
                 onClick={() => setAddMode(true)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setAddMode(true);
+                  }
+                }}
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -1170,19 +1166,7 @@ export function SkillsConfig({
                   if (!addMode) e.currentTarget.style.background = "none";
                 }}
               >
-                <svg
-                  width="13"
-                  height="13"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <line x1="12" y1="5" x2="12" y2="19" />
-                  <line x1="5" y1="12" x2="19" y2="12" />
-                </svg>
+                <Plus size={13} aria-hidden="true" />
                 {t("skillsConfig.addSkill")}
               </div>
             </div>
@@ -1309,7 +1293,7 @@ export function SkillsConfig({
             {t("skillsConfig.close")}
           </button>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

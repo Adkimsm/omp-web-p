@@ -1,10 +1,27 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, type CSSProperties } from "react";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import { useModalDialog } from "@/hooks/useModalDialog";
 import { useI18n } from "@/lib/i18n";
 import { formatApiError } from "@/lib/i18n/api-error";
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+} from "@/components/ui/primitives";
+import {
+  Field as FormField,
+  FieldGroup,
+  TextInput,
+  NumInput,
+  SecretInput,
+  Select as FormSelect,
+  Check as FormCheck,
+  ConfirmDialog,
+  useFieldValidation,
+} from "@/components/ui/field";
+import { Plus, Trash2, RefreshCw, AlertCircle, Cpu, Settings, Sparkles, Check as CheckIcon } from "lucide-react";
+import { toast } from "@/components/ui/toast";
 // Color icons (have their own fill colors — no background needed)
 import AnthropicIcon from "@lobehub/icons/es/Anthropic/components/Mono";
 import OpenAIIcon from "@lobehub/icons/es/OpenAI/components/Mono";
@@ -176,135 +193,6 @@ const API_OPTIONS = [
 
 // ── Form field helpers ────────────────────────────────────────────────────────
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-      <label style={{ fontSize: 11, color: "var(--text-muted)", fontWeight: 500 }}>{label}</label>
-      {children}
-    </div>
-  );
-}
-
-const inputStyle = {
-  padding: "6px 9px",
-  background: "var(--bg-panel)",
-  border: "1px solid var(--border)",
-  borderRadius: 5,
-  color: "var(--text)",
-  fontSize: 12,
-  outline: "none",
-  width: "100%",
-  boxSizing: "border-box" as const,
-};
-
-function TextInput({ value, onChange, placeholder, mono }: { value: string; onChange: (v: string) => void; placeholder?: string; mono?: boolean }) {
-  return <input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder}
-    style={{ ...inputStyle, fontFamily: mono ? "var(--font-mono)" : "inherit" }} />;
-}
-
-function SecretTextInput({
-  value,
-  onChange,
-  placeholder,
-  mono,
-  onKeyDown,
-  autoComplete = "off",
-  spellCheck = false,
-  style,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-  mono?: boolean;
-  onKeyDown?: React.KeyboardEventHandler<HTMLInputElement>;
-  autoComplete?: string;
-  spellCheck?: boolean;
-  style?: React.CSSProperties;
-}) {
-  const { t } = useI18n();
-  const [visible, setVisible] = useState(false);
-
-  useEffect(() => {
-    if (!value) setVisible(false);
-  }, [value]);
-
-  return (
-    <div style={{ position: "relative", width: "100%", ...style }}>
-      <input
-        type={visible ? "text" : "password"}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyDown={onKeyDown}
-        placeholder={placeholder}
-        style={{ ...inputStyle, paddingRight: 34, fontFamily: mono ? "var(--font-mono)" : "inherit" }}
-        autoComplete={autoComplete}
-        spellCheck={spellCheck}
-      />
-      <button
-        type="button"
-        onClick={() => setVisible((v) => !v)}
-        aria-label={visible ? t("modelsConfig.hideApiKey") : t("modelsConfig.showApiKey")}
-        title={visible ? t("modelsConfig.hideApiKey") : t("modelsConfig.showApiKey")}
-        style={{
-          position: "absolute",
-          right: 5,
-          top: "50%",
-          transform: "translateY(-50%)",
-          width: 24,
-          height: 24,
-          padding: 0,
-          border: "none",
-          background: "transparent",
-          color: "var(--text-dim)",
-          cursor: "pointer",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        {visible ? (
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M17.94 17.94A10.94 10.94 0 0 1 12 20C7 20 2.73 16.89 1 12a18.45 18.45 0 0 1 5.06-6.94" />
-            <path d="M9.9 4.24A10.94 10.94 0 0 1 12 4c5 0 9.27 3.11 11 8a18.5 18.5 0 0 1-2.16 3.19" />
-            <path d="M14.12 14.12A3 3 0 0 1 9.88 9.88" />
-            <path d="M1 1l22 22" />
-          </svg>
-        ) : (
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12Z" />
-            <circle cx="12" cy="12" r="3" />
-          </svg>
-        )}
-      </button>
-    </div>
-  );
-}
-
-function NumInput({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
-  return <input type="number" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} style={inputStyle} />;
-}
-
-function Select({ value, onChange, options, required }: { value: string; onChange: (v: string) => void; options: readonly string[]; required?: boolean }) {
-  const { t } = useI18n();
-  return (
-    <select value={value} onChange={(e) => onChange(e.target.value)}
-      style={{ ...inputStyle, color: value ? "var(--text)" : "var(--text-dim)" }}>
-      {!required && <option value="">{t("modelsConfig.inheritNone")}</option>}
-      {options.map((o) => <option key={o} value={o}>{o}</option>)}
-    </select>
-  );
-}
-
-function Check({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12, color: "var(--text-muted)" }}>
-      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)}
-        style={{ width: 13, height: 13, accentColor: "var(--accent)", cursor: "pointer" }} />
-      {label}
-    </label>
-  );
-}
-
 /** Renders a translated string, displaying `backtick` segments in mono code font. */
 function CodeText({ text }: { text: string }) {
   const parts = text.split("`");
@@ -330,6 +218,7 @@ function ProviderDetail({ name, provider, onChange, onRename, onDelete }: {
 }) {
   const { t } = useI18n();
   const [editingName, setEditingName] = useState(name);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   useEffect(() => setEditingName(name), [name]);
   const set = <K extends keyof ProviderEntry>(k: K, v: ProviderEntry[K]) => onChange({ ...provider, [k]: v });
 
@@ -338,45 +227,172 @@ function ProviderDetail({ name, provider, onChange, onRename, onDelete }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [provider.api]);
 
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <SectionTitle>{t("modelsConfig.provider")}</SectionTitle>
-        <button onClick={onDelete}
-          style={{ padding: "3px 8px", background: "none", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 4, color: "#ef4444", cursor: "pointer", fontSize: 11 }}>
-          {t("modelsConfig.delete")}
-        </button>
-      </div>
+  // Provider name is required and must not collide with another provider; we
+  // surface a simple non-empty check on blur and on rename submit.
+  const renameValidate = () => {
+    if (!editingName.trim()) return t("modelsConfig.errorNameRequired");
+    if (editingName.trim() !== name) {
+      // Note: collision is only visible to the parent; we leave that check to
+      // the consumer. Here we just enforce non-empty.
+      return null;
+    }
+    return null;
+  };
+  const renameV = useFieldValidation(renameValidate);
+  const baseUrlValidate = () => {
+    const v = provider.baseUrl ?? "";
+    if (!v.trim()) return null; // optional
+    try {
+      const u = new URL(v);
+      if (u.protocol !== "http:" && u.protocol !== "https:") return t("modelsConfig.errorUrlInvalid");
+      return null;
+    } catch {
+      return t("modelsConfig.errorUrlInvalid");
+    }
+  };
+  const baseUrlV = useFieldValidation(baseUrlValidate);
+  const apiKeyValidate = () => {
+    if (provider.auth === "none") return null;
+    if (!provider.apiKey || !provider.apiKey.trim()) return t("modelsConfig.errorApiKeyRequired");
+    return null;
+  };
+  const apiKeyV = useFieldValidation(apiKeyValidate);
 
-      <Field label={t("modelsConfig.providerName")}>
-        <TextInput value={editingName} onChange={setEditingName} placeholder="provider-name" mono />
-        {editingName !== name && editingName.trim() && (
-          <button onClick={() => onRename(editingName.trim())}
-            style={{ marginTop: 4, padding: "3px 10px", background: "var(--accent)", border: "none", borderRadius: 4, color: "#fff", cursor: "pointer", fontSize: 11, alignSelf: "flex-start" }}>
+  const trimmedRename = editingName.trim();
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <FieldGroup
+        label={
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+            <Settings size={11} aria-hidden="true" /> {t("modelsConfig.provider")}
+          </span>
+        }
+      >
+        <FormField
+          label={t("modelsConfig.providerName")}
+          required
+          error={renameV.error}
+        >
+          <TextInput
+            value={editingName}
+            onChange={(v) => { setEditingName(v); renameV.onChange(); }}
+            placeholder="provider-name"
+            mono
+            invalid={Boolean(renameV.error)}
+            error={renameV.error}
+            onBlurValidate={renameV.onBlur}
+          />
+        </FormField>
+        {trimmedRename !== name && (
+          <button
+            type="button"
+            onClick={() => {
+              const err = renameV.onSubmit();
+              if (!err) onRename(trimmedRename);
+            }}
+            style={{
+              alignSelf: "flex-start",
+              padding: "5px 12px",
+              background: "var(--accent)",
+              border: "none",
+              borderRadius: "var(--radius-control)",
+              color: "#fff",
+              cursor: "pointer",
+              fontSize: 11,
+              fontWeight: 600,
+            }}
+          >
             {t("modelsConfig.rename")}
           </button>
         )}
-      </Field>
 
-      <Field label={t("modelsConfig.baseUrl")}>
-        <TextInput value={provider.baseUrl ?? ""} onChange={(v) => set("baseUrl", v || undefined)}
-          placeholder="https://api.example.com/v1" mono />
-      </Field>
+        <FormField
+          label={t("modelsConfig.baseUrl")}
+          error={baseUrlV.error}
+        >
+          <TextInput
+            value={provider.baseUrl ?? ""}
+            onChange={(v) => { set("baseUrl", v || undefined); baseUrlV.onChange(); }}
+            placeholder="https://api.example.com/v1"
+            mono
+            invalid={Boolean(baseUrlV.error)}
+            error={baseUrlV.error}
+            onBlurValidate={baseUrlV.onBlur}
+          />
+        </FormField>
 
-      <Field label={t("modelsConfig.apiKey")}>
-        <SecretTextInput value={provider.apiKey ?? ""} onChange={(v) => set("apiKey", v || undefined)}
-          placeholder={t("modelsConfig.apiKeyPlaceholder")} mono />
-        <span style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2 }}>
-          <CodeText text={t("modelsConfig.apiKeyHint")} />
-        </span>
-      </Field>
+        <FormField
+          label={t("modelsConfig.apiKey")}
+          hint={<CodeText text={t("modelsConfig.apiKeyHint")} />}
+          error={apiKeyV.error}
+        >
+          <SecretInput
+            value={provider.apiKey ?? ""}
+            onChange={(v) => { set("apiKey", v || undefined); apiKeyV.onChange(); }}
+            placeholder={t("modelsConfig.apiKeyPlaceholder")}
+            invalid={Boolean(apiKeyV.error)}
+            error={apiKeyV.error}
+            onBlurValidate={apiKeyV.onBlur}
+            showLabel={t("modelsConfig.showApiKey")}
+            hideLabel={t("modelsConfig.hideApiKey")}
+          />
+        </FormField>
 
-      <Check label={t("modelsConfig.noApiKeyRequired")} checked={provider.auth === "none"}
-        onChange={(v) => set("auth", v ? "none" : undefined)} />
+        <FormCheck
+          label={t("modelsConfig.noApiKeyRequired")}
+          checked={provider.auth === "none"}
+          onChange={(v) => {
+            set("auth", v ? "none" : undefined);
+            if (v) apiKeyV.onChange();
+            apiKeyV.onBlur();
+          }}
+        />
 
-      <Field label={t("modelsConfig.api")}>
-        <Select value={provider.api ?? "openai-completions"} onChange={(v) => set("api", v)} options={API_OPTIONS} required />
-      </Field>
+        <FormField label={t("modelsConfig.api")}>
+          <FormSelect
+            value={provider.api ?? "openai-completions"}
+            onChange={(v) => set("api", v)}
+            options={API_OPTIONS}
+            required
+            placeholder={t("modelsConfig.inheritNone")}
+          />
+        </FormField>
+      </FieldGroup>
+
+      <button
+        type="button"
+        onClick={() => setDeleteOpen(true)}
+        style={{
+          alignSelf: "flex-start",
+          padding: "5px 12px",
+          background: "none",
+          border: "1px solid color-mix(in srgb, var(--accent) 30%, transparent)",
+          borderRadius: "var(--radius-control)",
+          color: "var(--accent)",
+          cursor: "pointer",
+          fontSize: 11,
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 5,
+        }}
+      >
+        <Trash2 size={12} aria-hidden="true" /> {t("modelsConfig.delete")}
+      </button>
+
+      <ConfirmDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        title={t("modelsConfig.deleteProviderTitle", { name })}
+        description={t("modelsConfig.deleteProviderBody", { name })}
+        confirmLabel={t("modelsConfig.delete")}
+        cancelLabel={t("modelsConfig.cancel")}
+        danger
+        onConfirm={() => {
+          setDeleteOpen(false);
+          onDelete();
+        }}
+      />
     </div>
   );
 }
@@ -567,12 +583,15 @@ function ModelDetail({
 }) {
   const { t } = useI18n();
   const [testState, setTestState] = useState<ModelTestState>({ phase: "idle" });
+  const [removeOpen, setRemoveOpen] = useState(false);
   const set = <K extends keyof ModelEntry>(k: K, v: ModelEntry[K]) => onChange({ ...model, [k]: v });
   const costVal = (k: keyof NonNullable<ModelEntry["cost"]>) => model.cost?.[k] !== undefined ? String(model.cost[k]) : "";
   const setCost = (k: keyof NonNullable<ModelEntry["cost"]>, v: string) => {
     const n = parseFloat(v);
     onChange({ ...model, cost: { ...(model.cost ?? {}), [k]: isNaN(n) ? undefined : n } });
   };
+  const idValidate = () => (!model.id.trim() ? t("modelsConfig.errorIdRequired") : null);
+  const idV = useFieldValidation(idValidate);
   const testSummary = (() => {
     if (testState.phase === "idle") return null;
     if (testState.phase === "testing") return t("modelsConfig.validatingConfig");
@@ -628,92 +647,85 @@ function ModelDetail({
   }, [model, provider, providerName, testState.phase]);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <SectionTitle>{t("modelsConfig.model")}</SectionTitle>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {testSummary && (
-            <span
-              title={testSummary}
-              style={{
-                maxWidth: 260,
-                height: 24,
-                padding: "0 8px",
-                border: `1px solid ${testState.phase === "error" ? "#fecaca" : testState.phase === "success" ? "#bbf7d0" : "var(--border)"}`,
-                borderRadius: 4,
-                background: testState.phase === "error" ? "#fee2e2" : testState.phase === "success" ? "#dcfce7" : "#e5e7eb",
-                color: "#111827",
-                fontSize: 11,
-                display: "inline-flex",
-                alignItems: "center",
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                boxSizing: "border-box",
-              }}
-            >
-              {testSummary}
-            </span>
-          )}
-          <button
-            onClick={handleTest}
-            disabled={!model.id.trim() || testState.phase === "testing"}
-            title={t("modelsConfig.testTitle")}
-            style={{
-              height: 24,
-              padding: "0 8px",
-              background: testState.phase === "success" ? "#16a34a" : "none",
-              border: `1px solid ${testState.phase === "success" ? "#16a34a" : "var(--border)"}`,
-              borderRadius: 4,
-              color: testState.phase === "success" ? "#fff" : (!model.id.trim() || testState.phase === "testing") ? "var(--text-dim)" : "var(--text-muted)",
-              cursor: (!model.id.trim() || testState.phase === "testing") ? "not-allowed" : "pointer",
-              fontSize: 11,
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              boxSizing: "border-box",
-              gap: 5,
-            }}
-          >
-            {testState.phase === "success" && (
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="20 6 9 17 4 12" />
-              </svg>
-            )}
-            {testState.phase === "testing" ? t("modelsConfig.testing") : testState.phase === "success" ? t("modelsConfig.ok") : t("modelsConfig.test")}
-          </button>
-          <button onClick={onDelete}
-            style={{ height: 24, padding: "0 8px", background: "none", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 4, color: "#ef4444", cursor: "pointer", fontSize: 11, boxSizing: "border-box" }}>
-            {t("modelsConfig.remove")}
-          </button>
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <FieldGroup
+        label={
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+            <Cpu size={11} aria-hidden="true" /> {t("modelsConfig.model")}
+          </span>
+        }
+      >
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <FormField label={t("modelsConfig.idRequired")} required error={idV.error}>
+            <TextInput
+              value={model.id}
+              onChange={(v) => { set("id", v); idV.onChange(); }}
+              placeholder="model-id"
+              mono
+              invalid={Boolean(idV.error)}
+              error={idV.error}
+              onBlurValidate={idV.onBlur}
+            />
+          </FormField>
+          <FormField label={t("modelsConfig.name")}>
+            <TextInput
+              value={model.name ?? ""}
+              onChange={(v) => set("name", v || undefined)}
+              placeholder={t("modelsConfig.displayNamePlaceholder")}
+            />
+          </FormField>
         </div>
-      </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-        <Field label={t("modelsConfig.idRequired")}><TextInput value={model.id} onChange={(v) => set("id", v)} placeholder="model-id" mono /></Field>
-        <Field label={t("modelsConfig.name")}><TextInput value={model.name ?? ""} onChange={(v) => set("name", v || undefined)} placeholder={t("modelsConfig.displayNamePlaceholder")} /></Field>
-      </div>
+        <FormField label={t("modelsConfig.apiOverride")}>
+          <FormSelect
+            value={model.api ?? ""}
+            onChange={(v) => set("api", v || undefined)}
+            options={API_OPTIONS}
+            placeholder={t("modelsConfig.inheritNone")}
+          />
+        </FormField>
 
-      <Field label={t("modelsConfig.apiOverride")}>
-        <Select value={model.api ?? ""} onChange={(v) => set("api", v || undefined)} options={API_OPTIONS} />
-      </Field>
-
-      <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
-        <Check label={t("modelsConfig.reasoningThinking")} checked={model.reasoning ?? false} onChange={(v) => set("reasoning", v || undefined)} />
-        <Check label={t("modelsConfig.imageInput")} checked={model.input?.includes("image") ?? false}
-          onChange={(v) => set("input", v ? ["text", "image"] : undefined)} />
-      </div>
+        <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
+          <FormCheck
+            label={t("modelsConfig.reasoningThinking")}
+            checked={model.reasoning ?? false}
+            onChange={(v) => set("reasoning", v || undefined)}
+          />
+          <FormCheck
+            label={t("modelsConfig.imageInput")}
+            checked={model.input?.includes("image") ?? false}
+            onChange={(v) => set("input", v ? ["text", "image"] : undefined)}
+          />
+        </div>
+      </FieldGroup>
 
       {model.reasoning && (
-        <div>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-            <SectionTitle>{t("modelsConfig.thinkingLevels")}</SectionTitle>
+        <FieldGroup
+          label={
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+              <Sparkles size={11} aria-hidden="true" /> {t("modelsConfig.thinkingLevels")}
+            </span>
+          }
+        >
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
             {model.thinking && (
               <button
+                type="button"
                 onClick={() => set("thinking", undefined)}
-                style={{ fontSize: 10, padding: "2px 7px", background: "none", border: "1px solid var(--border)", borderRadius: 4, color: "var(--text-dim)", cursor: "pointer" }}
+                style={{
+                  fontSize: 10,
+                  padding: "3px 9px",
+                  background: "none",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius-control)",
+                  color: "var(--text-dim)",
+                  cursor: "pointer",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                }}
               >
-                {t("modelsConfig.resetToAuto")}
+                <RefreshCw size={10} aria-hidden="true" /> {t("modelsConfig.resetToAuto")}
               </button>
             )}
           </div>
@@ -721,30 +733,147 @@ function ModelDetail({
             value={model.thinking}
             onChange={(v) => set("thinking", v)}
           />
-        </div>
+        </FieldGroup>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-        <Field label={t("modelsConfig.contextWindowTokens")}>
-          <NumInput value={model.contextWindow !== undefined ? String(model.contextWindow) : ""}
-            onChange={(v) => set("contextWindow", v ? parseInt(v) : undefined)} placeholder="128000" />
-        </Field>
-        <Field label={t("modelsConfig.maxOutputTokens")}>
-          <NumInput value={model.maxTokens !== undefined ? String(model.maxTokens) : ""}
-            onChange={(v) => set("maxTokens", v ? parseInt(v) : undefined)} placeholder="16384" />
-        </Field>
-      </div>
+      <FieldGroup label={t("modelsConfig.tokenLimits")}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <FormField label={t("modelsConfig.contextWindowTokens")}>
+            <NumInput
+              value={model.contextWindow !== undefined ? String(model.contextWindow) : ""}
+              onChange={(v) => set("contextWindow", v ? parseInt(v) : undefined)}
+              placeholder="128000"
+            />
+          </FormField>
+          <FormField label={t("modelsConfig.maxOutputTokens")}>
+            <NumInput
+              value={model.maxTokens !== undefined ? String(model.maxTokens) : ""}
+              onChange={(v) => set("maxTokens", v ? parseInt(v) : undefined)}
+              placeholder="16384"
+            />
+          </FormField>
+        </div>
+      </FieldGroup>
 
-      <div>
-        <SectionTitle>{t("modelsConfig.costPerMillion")}</SectionTitle>
-        <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8 }}>
+      <FieldGroup label={t("modelsConfig.costPerMillion")}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10 }}>
           {(["input", "output", "cacheRead", "cacheWrite"] as const).map((k) => (
-            <Field key={k} label={t(COST_LABEL_KEYS[k])}>
+            <FormField key={k} label={t(COST_LABEL_KEYS[k])}>
               <NumInput value={costVal(k)} onChange={(v) => setCost(k, v)} placeholder="0" />
-            </Field>
+            </FormField>
           ))}
         </div>
+      </FieldGroup>
+
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+        {testSummary && (
+          <span
+            title={testSummary}
+            style={{
+              maxWidth: 360,
+              padding: "4px 10px",
+              border: `1px solid ${
+                testState.phase === "error"
+                  ? "color-mix(in srgb, var(--accent) 30%, transparent)"
+                  : testState.phase === "success"
+                    ? "color-mix(in srgb, var(--accent) 25%, transparent)"
+                    : "var(--border)"
+              }`,
+              borderRadius: "var(--radius-control)",
+              background:
+                testState.phase === "error"
+                  ? "color-mix(in srgb, var(--accent) 10%, var(--bg-panel))"
+                  : testState.phase === "success"
+                    ? "color-mix(in srgb, var(--accent) 8%, var(--bg-panel))"
+                    : "var(--bg-panel)",
+              color:
+                testState.phase === "error" || testState.phase === "success"
+                  ? "var(--text)"
+                  : "var(--text-muted)",
+              fontSize: 11,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {testState.phase === "success" ? <CheckIcon size={11} aria-hidden="true" /> : null}
+            {testState.phase === "error" ? <AlertCircle size={11} aria-hidden="true" /> : null}
+            {testSummary}
+          </span>
+        )}
+        <div style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
+          <button
+            type="button"
+            onClick={handleTest}
+            disabled={!model.id.trim() || testState.phase === "testing"}
+            title={t("modelsConfig.testTitle")}
+            style={{
+              padding: "5px 12px",
+              background: testState.phase === "success" ? "color-mix(in srgb, var(--accent) 18%, var(--bg-panel))" : "none",
+              border: `1px solid ${
+                testState.phase === "success"
+                  ? "color-mix(in srgb, var(--accent) 30%, transparent)"
+                  : "var(--border)"
+              }`,
+              borderRadius: "var(--radius-control)",
+              color:
+                testState.phase === "success"
+                  ? "var(--accent)"
+                  : !model.id.trim() || testState.phase === "testing"
+                    ? "var(--text-dim)"
+                    : "var(--text-muted)",
+              cursor: !model.id.trim() || testState.phase === "testing" ? "not-allowed" : "pointer",
+              fontSize: 11,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 5,
+            }}
+          >
+            {testState.phase === "success" && <CheckIcon size={11} aria-hidden="true" />}
+            {testState.phase === "testing"
+              ? t("modelsConfig.testing")
+              : testState.phase === "success"
+                ? t("modelsConfig.ok")
+                : t("modelsConfig.test")}
+          </button>
+          <button
+            type="button"
+            onClick={() => setRemoveOpen(true)}
+            style={{
+              padding: "5px 12px",
+              background: "none",
+              border: "1px solid color-mix(in srgb, var(--accent) 30%, transparent)",
+              borderRadius: "var(--radius-control)",
+              color: "var(--accent)",
+              cursor: "pointer",
+              fontSize: 11,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+            }}
+          >
+            <Trash2 size={11} aria-hidden="true" /> {t("modelsConfig.remove")}
+          </button>
+        </div>
       </div>
+
+      <ConfirmDialog
+        open={removeOpen}
+        onOpenChange={setRemoveOpen}
+        title={t("modelsConfig.removeModelTitle", { id: model.id })}
+        description={t("modelsConfig.removeModelBody", { id: model.id })}
+        confirmLabel={t("modelsConfig.remove")}
+        cancelLabel={t("modelsConfig.cancel")}
+        danger
+        onConfirm={() => {
+          setRemoveOpen(false);
+          onDelete();
+        }}
+      />
     </div>
   );
 }
@@ -1106,9 +1235,6 @@ function AddProviderPicker({
   const { t, tn } = useI18n();
   const [search, setSearch] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
-  const dialogRef = useModalDialog<HTMLDivElement>({ onClose });
-
-  useEffect(() => { setTimeout(() => inputRef.current?.focus(), 30); }, []);
 
   const q = search.trim().toLowerCase();
 
@@ -1118,44 +1244,60 @@ function AddProviderPicker({
 
   const totalCount = availableOAuth.length + availableApiKey.length + (showCustom ? 1 : 0);
 
-  const cardStyle: React.CSSProperties = {
+  const cardStyle: CSSProperties = {
     display: "flex", flexDirection: "row", alignItems: "center", gap: 8,
     padding: "10px 12px",
     background: "var(--bg-panel)",
     border: "1px solid var(--border)",
-    borderRadius: 7,
+    borderRadius: "var(--radius-control)",
     boxSizing: "border-box",
     cursor: "pointer",
     minWidth: 0,
     textAlign: "left",
-    transition: "border-color 0.12s, background 0.12s",
+    transition: "border-color var(--dur-fast) var(--ease-out-warm), background var(--dur-fast) var(--ease-out-warm)",
     width: "100%",
   };
 
-
-
   return (
-    <div
-      style={{ position: "fixed", inset: 0, zIndex: 1100, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center" }}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
-    >
-      <div ref={dialogRef} role="dialog" aria-modal="true" aria-label={t("modelsConfig.addProvider")} tabIndex={-1} style={{ width: 820, maxWidth: "calc(100vw - 32px)", maxHeight: "min(72vh, calc(100vh - 32px))", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 10, display: "flex", flexDirection: "column", boxShadow: "0 8px 32px rgba(0,0,0,0.22)", overflow: "hidden", outline: "none" }}>
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent
+        ariaLabel={t("modelsConfig.addProvider")}
+        style={{
+          width: 820,
+          maxWidth: "min(92vw, 820px)",
+          maxHeight: "min(72dvh, calc(100dvh - 32px))",
+          padding: 0,
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+        }}
+      >
+        <DialogTitle style={{ margin: "14px 18px 8px", fontSize: 18 }}>{t("modelsConfig.addProvider")}</DialogTitle>
+
         {/* Search */}
-        <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--border)", flexShrink: 0, display: "flex", alignItems: "center", gap: 8 }}>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--text-dim)", flexShrink: 0 }}>
-            <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-          </svg>
-          <input
-            ref={inputRef}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder={t("modelsConfig.searchProviders")}
-            style={{ flex: 1, background: "none", border: "none", outline: "none", color: "var(--text)", fontSize: 13, boxSizing: "border-box" }}
-          />
+        <div style={{ padding: "8px 14px 12px", flexShrink: 0 }}>
+          <div style={{
+            display: "flex", alignItems: "center", gap: 8,
+            padding: "6px 10px",
+            background: "var(--bg)",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius-control)",
+          }}>
+            <input
+              ref={inputRef}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder={t("modelsConfig.searchProviders")}
+              style={{
+                flex: 1, background: "none", border: "none", outline: "none",
+                color: "var(--text)", fontSize: 13, boxSizing: "border-box", minWidth: 0,
+              }}
+            />
+          </div>
         </div>
 
         {/* Card grid */}
-        <div style={{ flex: 1, overflowY: "auto", padding: 14 }}>
+        <div style={{ flex: 1, overflowY: "auto", padding: "4px 14px 14px" }}>
           {totalCount === 0 ? (
             <div style={{ padding: "20px 0", fontSize: 12, color: "var(--text-dim)", textAlign: "center" }}>{t("modelsConfig.noProvidersMatch")}</div>
           ) : (
@@ -1165,6 +1307,7 @@ function AddProviderPicker({
               )}
               {showCustom && (
                 <button
+                  type="button"
                   onClick={() => { onAddCustom(); onClose(); }}
                   style={cardStyle}
                   onMouseEnter={(e) => { e.currentTarget.style.borderColor = "var(--accent)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
@@ -1175,9 +1318,7 @@ function AddProviderPicker({
                     <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2 }}>{t("modelsConfig.customEndpointFormat")}</div>
                   </div>
                   <span style={{ width: 26, height: 26, borderRadius: 5, background: "var(--bg-hover)", border: "1px dashed var(--border)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--text-dim)" }}>
-                      <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
-                    </svg>
+                    <Plus size={13} aria-hidden="true" />
                   </span>
                 </button>
               )}
@@ -1186,7 +1327,7 @@ function AddProviderPicker({
                 <div style={{ gridColumn: "1 / -1", paddingTop: showCustom ? 6 : 0, fontSize: 10, fontWeight: 600, color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: "0.07em" }}>{t("modelsConfig.subscriptions")}</div>
               )}
               {availableOAuth.map((p) => (
-                <button key={p.id} onClick={() => { onSelectOAuth(p.id); onClose(); }}
+                <button key={p.id} type="button" onClick={() => { onSelectOAuth(p.id); onClose(); }}
                   style={cardStyle}
                   onMouseEnter={(e) => { e.currentTarget.style.borderColor = "var(--accent)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
                   onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.background = "var(--bg-panel)"; }}
@@ -1203,7 +1344,7 @@ function AddProviderPicker({
                 <div style={{ gridColumn: "1 / -1", paddingTop: availableOAuth.length > 0 ? 6 : 0, fontSize: 10, fontWeight: 600, color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: "0.07em" }}>{t("modelsConfig.apiKey")}</div>
               )}
               {availableApiKey.map((p) => (
-                <button key={p.id} onClick={() => { onSelectApiKey(p.id); onClose(); }}
+                <button key={p.id} type="button" onClick={() => { onSelectApiKey(p.id); onClose(); }}
                   style={cardStyle}
                   onMouseEnter={(e) => { e.currentTarget.style.borderColor = "var(--accent)"; e.currentTarget.style.background = "var(--bg-hover)"; }}
                   onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.background = "var(--bg-panel)"; }}
@@ -1219,8 +1360,8 @@ function AddProviderPicker({
             </div>
           )}
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -1229,7 +1370,6 @@ function AddProviderPicker({
 export function ModelsConfig({ onClose }: { onClose: () => void }) {
   const { t } = useI18n();
   const isMobile = useIsMobile();
-  const dialogRef = useModalDialog<HTMLDivElement>({ onClose });
   const [config, setConfig] = useState<ModelsFileData>({ providers: {} });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -1371,17 +1511,25 @@ export function ModelsConfig({ onClose }: { onClose: () => void }) {
       });
       const d = await res.json() as { success?: boolean; error?: string; code?: string };
       if (!res.ok || d.error) {
-        setSaveError(d.error || d.code ? formatApiError(d) : `HTTP ${res.status}`);
+        const msg = d.error || d.code ? formatApiError(d) : `HTTP ${res.status}`;
+        setSaveError(msg);
+        toast.error(t("modelsConfig.saveErrorTitle"), msg);
         // The file became unparseable after it was loaded — the server refused
         // the write, so switch the editor into the same blocked state.
         if (d.code === "models_config_unparseable") setParseError({ message: d.error ?? formatApiError(d) });
-      } else { setSavedOk(true); setTimeout(() => setSavedOk(false), 2000); }
+      } else {
+        setSavedOk(true);
+        setTimeout(() => setSavedOk(false), 2000);
+        toast.success(t("modelsConfig.saveSuccessTitle"));
+      }
     } catch (e) {
-      setSaveError(String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setSaveError(msg);
+      toast.error(t("modelsConfig.saveErrorTitle"), msg);
     } finally {
       setSaving(false);
     }
-  }, [config, parseError]);
+  }, [config, parseError, t]);
 
   const providers = Object.entries(config.providers ?? {});
   const activeOAuth = oauthProviders.filter((p) => p.loggedIn);
@@ -1431,14 +1579,25 @@ export function ModelsConfig({ onClose }: { onClose: () => void }) {
 
   return (
     <>
-    <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center" }}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="models-config-title" tabIndex={-1} style={{ width: isMobile ? "calc(100vw - 16px)" : 860, maxWidth: "calc(100vw - 16px)", height: isMobile ? "calc(100dvh - 16px)" : "78vh", maxHeight: "calc(100dvh - 16px)", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 10, display: "flex", flexDirection: "column", boxShadow: "0 8px 32px rgba(0,0,0,0.18)", overflow: "hidden", outline: "none" }}>
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent
+        ariaLabel={t("modelsConfig.title")}
+        style={{
+          width: isMobile ? "calc(100vw - 16px)" : 860,
+          maxWidth: "calc(100vw - 16px)",
+          height: isMobile ? "calc(100dvh - 16px)" : "78vh",
+          maxHeight: "calc(100dvh - 16px)",
+          padding: 0,
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+        }}
+      >
 
         {/* Header */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 18px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-            <span id="models-config-title" style={{ fontSize: 15, fontWeight: 700, color: "var(--text)" }}>{t("modelsConfig.title")}</span>
+            <DialogTitle style={{ fontSize: 16, margin: 0 }}>{t("modelsConfig.title")}</DialogTitle>
             <code style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>~/.omp/agent/models.yml</code>
           </div>
           <button onClick={onClose} aria-label={t("modelsConfig.close")} title={t("modelsConfig.close")} style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: 20, lineHeight: 1, padding: "2px 6px" }}>×</button>
@@ -1628,8 +1787,8 @@ export function ModelsConfig({ onClose }: { onClose: () => void }) {
             <span>{savedOk ? t("modelsConfig.saved") : saving ? t("modelsConfig.saving") : t("modelsConfig.save")}</span>
           </button>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
     {pickerOpen && (
       <AddProviderPicker
         oauthProviders={oauthProviders}

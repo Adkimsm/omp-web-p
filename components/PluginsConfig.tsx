@@ -3,9 +3,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { sendAgentCommand } from "@/lib/agent-client";
 import { useIsMobile } from "@/hooks/useIsMobile";
-import { useModalDialog } from "@/hooks/useModalDialog";
 import { translate, translatePlural, useI18n } from "@/lib/i18n";
 import { formatApiError } from "@/lib/i18n/api-error";
+import {
+  Dialog,
+  DialogContent,
+} from "@/components/ui/primitives";
+import { ConfirmDialog } from "@/components/ui/field";
+import { toast } from "@/components/ui/toast";
+import { Plus } from "lucide-react";
 import type { PluginPackageInfo, PluginsResponse } from "@/lib/api-types";
 
 type PluginScope = PluginPackageInfo["scope"];
@@ -442,6 +448,7 @@ function PackageDetail({
   const busy = busyKey?.endsWith(key) ?? false;
   const reloadBusy = busyKey === "reload";
   const enabled = !pkg.disabled;
+  const [confirmRemove, setConfirmRemove] = useState(false);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20, maxWidth: 680 }}>
@@ -510,7 +517,7 @@ function PackageDetail({
             {reloadBusy ? t("pluginsConfig.reloading") : t("pluginsConfig.reloadSession")}
           </button>
           <button
-            onClick={() => onAction("remove", pkg)}
+            onClick={() => setConfirmRemove(true)}
             disabled={busy || reloadBusy}
             style={buttonStyle(busy || reloadBusy, true)}
           >
@@ -571,6 +578,19 @@ function PackageDetail({
           {actionError}
         </div>
       )}
+      <ConfirmDialog
+        open={confirmRemove}
+        onOpenChange={setConfirmRemove}
+        title={t("pluginsConfig.removePluginTitle")}
+        description={t("pluginsConfig.removePluginBody", { source: pkg.source })}
+        confirmLabel={t("pluginsConfig.remove")}
+        cancelLabel={t("pluginsConfig.cancel")}
+        danger
+        onConfirm={() => {
+          setConfirmRemove(false);
+          onAction("remove", pkg);
+        }}
+      />
     </div>
   );
 }
@@ -588,7 +608,6 @@ export function PluginsConfig({
 }) {
   const isMobile = useIsMobile();
   const { t, tn } = useI18n();
-  const dialogRef = useModalDialog<HTMLDivElement>({ onClose });
   const [data, setData] = useState<PluginsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -651,6 +670,7 @@ export function PluginsConfig({
         setSelected(next.packages[0] ? packageKey(next.packages[0]) : null);
         if (next.packages.length === 0) setAddMode(true);
         setActionMessage(translate("pluginsConfig.packageRemoved"));
+        toast.success(t("pluginsConfig.packageRemoved"));
       } else {
         const messageKeys: Record<Exclude<PluginAction, "remove">, string> = {
           install: "pluginsConfig.packageInstalled",
@@ -659,13 +679,16 @@ export function PluginsConfig({
           enable: "pluginsConfig.packageEnabledMsg",
         };
         setActionMessage(translate(messageKeys[action]));
+        toast.success(translate(messageKeys[action]));
       }
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
+      const msg = err instanceof Error ? err.message : String(err);
+      setActionError(msg);
+      toast.error(t("pluginsConfig.actionErrorTitle", { action: t(`pluginsConfig.action_${action}`) }), msg);
     } finally {
       setBusyKey(null);
     }
-  }, [cwd]);
+  }, [cwd, t]);
 
   const installPlugin = useCallback(async () => {
     const source = installSource.trim();
@@ -715,39 +738,18 @@ export function PluginsConfig({
   const addBusy = busyKey?.startsWith("install:") ?? false;
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 1000,
-        background: "rgba(0,0,0,0.35)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-      }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="plugins-config-title"
-        tabIndex={-1}
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent
+        ariaLabel={t("pluginsConfig.title")}
         style={{
           width: isMobile ? "calc(100vw - 16px)" : 860,
           maxWidth: "calc(100vw - 16px)",
           height: isMobile ? "calc(100dvh - 16px)" : "76vh",
           maxHeight: "calc(100dvh - 16px)",
-          background: "var(--bg)",
-          border: "1px solid var(--border)",
-          borderRadius: 8,
+          padding: 0,
           display: "flex",
           flexDirection: "column",
-          boxShadow: "0 8px 32px rgba(0,0,0,0.18)",
           overflow: "hidden",
-          outline: "none",
         }}
       >
         <div
@@ -761,7 +763,7 @@ export function PluginsConfig({
           }}
         >
           <div style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 }}>
-            <span id="plugins-config-title" style={{ fontSize: 15, fontWeight: 700, color: "var(--text)" }}>
+            <span style={{ fontSize: 15, fontWeight: 700, color: "var(--text)" }}>
               {t("pluginsConfig.title")}
             </span>
             <code
@@ -947,19 +949,7 @@ export function PluginsConfig({
                   if (!addMode) e.currentTarget.style.background = "none";
                 }}
               >
-                <svg
-                  width="13"
-                  height="13"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <line x1="12" y1="5" x2="12" y2="19" />
-                  <line x1="5" y1="12" x2="19" y2="12" />
-                </svg>
+                <Plus size={13} aria-hidden="true" />
                 {t("pluginsConfig.addPlugin")}
               </button>
             </div>
@@ -1045,7 +1035,7 @@ export function PluginsConfig({
             {t("pluginsConfig.close")}
           </button>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

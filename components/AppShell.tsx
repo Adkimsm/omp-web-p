@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { SessionSidebar } from "./SessionSidebar";
+import { ToastProvider } from "./ui/toast";
 import { ChatWindow } from "./ChatWindow";
 import { TabBar, type Tab } from "./TabBar";
 import { BranchNavigator } from "./BranchNavigator";
@@ -570,6 +571,7 @@ export function AppShell() {
 
   return (
     <>
+    <ToastProvider>
     <style>{`
       @keyframes session-info-pop {
         0% {
@@ -1353,6 +1355,7 @@ export function AppShell() {
         onReloaded={() => setSessionKey((k) => k + 1)}
       />
     )}
+    </ToastProvider>
     </>
   );
 }
