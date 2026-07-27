@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { sendAgentCommand } from "@/lib/agent-client";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { useModalDialog } from "@/hooks/useModalDialog";
 import { translate, translatePlural, useI18n } from "@/lib/i18n";
 import { formatApiError } from "@/lib/i18n/api-error";
 import type { PluginPackageInfo, PluginsResponse } from "@/lib/api-types";
@@ -587,6 +588,7 @@ export function PluginsConfig({
 }) {
   const isMobile = useIsMobile();
   const { t, tn } = useI18n();
+  const dialogRef = useModalDialog<HTMLDivElement>({ onClose });
   const [data, setData] = useState<PluginsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -728,6 +730,11 @@ export function PluginsConfig({
       }}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="plugins-config-title"
+        tabIndex={-1}
         style={{
           width: isMobile ? "calc(100vw - 16px)" : 860,
           maxWidth: "calc(100vw - 16px)",
@@ -740,6 +747,7 @@ export function PluginsConfig({
           flexDirection: "column",
           boxShadow: "0 8px 32px rgba(0,0,0,0.18)",
           overflow: "hidden",
+          outline: "none",
         }}
       >
         <div
@@ -753,7 +761,7 @@ export function PluginsConfig({
           }}
         >
           <div style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 }}>
-            <span style={{ fontSize: 15, fontWeight: 700, color: "var(--text)" }}>
+            <span id="plugins-config-title" style={{ fontSize: 15, fontWeight: 700, color: "var(--text)" }}>
               {t("pluginsConfig.title")}
             </span>
             <code

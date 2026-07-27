@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { useModalDialog } from "@/hooks/useModalDialog";
 import { translate, useI18n } from "@/lib/i18n";
 import { formatApiError } from "@/lib/i18n/api-error";
 import type {
@@ -699,6 +700,7 @@ export function SkillsConfig({
 }) {
   const isMobile = useIsMobile();
   const { t, tn } = useI18n();
+  const dialogRef = useModalDialog<HTMLDivElement>({ onClose });
   const [skills, setSkills] = useState<Skill[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -879,6 +881,11 @@ export function SkillsConfig({
       }}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="skills-config-title"
+        tabIndex={-1}
         style={{
           width: isMobile ? "calc(100vw - 16px)" : 860,
           maxWidth: "calc(100vw - 16px)",
@@ -891,6 +898,7 @@ export function SkillsConfig({
           flexDirection: "column",
           boxShadow: "0 8px 32px rgba(0,0,0,0.18)",
           overflow: "hidden",
+          outline: "none",
         }}
       >
         {/* Header */}
@@ -906,6 +914,7 @@ export function SkillsConfig({
         >
           <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
             <span
+              id="skills-config-title"
               style={{ fontSize: 15, fontWeight: 700, color: "var(--text)" }}
             >
               {t("skillsConfig.title")}

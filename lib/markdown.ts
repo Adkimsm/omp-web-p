@@ -1,9 +1,8 @@
+import { useEffect, useState } from "react";
 import type { Options as ReactMarkdownOptions } from "react-markdown";
-import rehypeKatex from "rehype-katex";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
 
 const markdownSanitizeSchema = {
   ...defaultSchema,
@@ -13,6 +12,85 @@ const markdownSanitizeSchema = {
   },
   strip: [...(defaultSchema.strip || []), "iframe", "object", "style", "form"],
 };
+
+export interface MarkdownPlugins {
+  remarkPlugins: NonNullable<ReactMarkdownOptions["remarkPlugins"]>;
+  rehypePlugins: NonNullable<ReactMarkdownOptions["rehypePlugins"]>;
+}
+
+// Math-free pipeline used until math syntax is detected. The math pipeline is
+// built from these same arrays, so the sanitize schema cannot drift between
+// the two.
+const baseMarkdownPlugins: MarkdownPlugins = {
+  remarkPlugins: [remarkGfm],
+  rehypePlugins: [rehypeRaw, [rehypeSanitize, markdownSanitizeSchema]],
+};
+
+let mathMarkdownPlugins: MarkdownPlugins | null = null;
+let mathMarkdownPluginsPromise: Promise<MarkdownPlugins> | null = null;
+
+/**
+ * Cheap gate deciding whether the KaTeX pipeline could matter for a document.
+ * False positives (e.g. dollar amounts) only cost loading the math chunk;
+ * remark-math then decides what is actually math.
+ */
+export function containsMathSyntax(markdown: string): boolean {
+  return markdown.includes("$") || markdown.includes("\\(") || markdown.includes("\\[");
+}
+
+/** Loads remark-math + rehype-katex + the KaTeX CSS once, caching module-level. */
+export function loadMathMarkdownPlugins(): Promise<MarkdownPlugins> {
+  if (!mathMarkdownPluginsPromise) {
+    mathMarkdownPluginsPromise = (async () => {
+      const [remarkMath, rehypeKatex] = await Promise.all([
+        import("remark-math").then((m) => m.default),
+        import("rehype-katex").then((m) => m.default),
+      ]);
+      if (typeof window !== "undefined") {
+        // KaTeX styles are only needed (and only loadable) in the browser.
+        await import("katex/dist/katex.min.css");
+      }
+      mathMarkdownPlugins = {
+        remarkPlugins: [...baseMarkdownPlugins.remarkPlugins, remarkMath],
+        rehypePlugins: [
+          ...baseMarkdownPlugins.rehypePlugins,
+          [rehypeKatex, { throwOnError: false, strict: false }],
+        ],
+      };
+      return mathMarkdownPlugins;
+    })().catch((error) => {
+      // Allow a later render to retry after e.g. a transient network failure.
+      mathMarkdownPluginsPromise = null;
+      throw error;
+    });
+  }
+  return mathMarkdownPluginsPromise;
+}
+
+/**
+ * Plugin arrays for ReactMarkdown. Documents without math syntax render with
+ * the math-free pipeline and never fetch the KaTeX chunk; the first document
+ * containing math triggers the lazy load and re-renders when it lands.
+ */
+export function useMarkdownPlugins(markdown: string): MarkdownPlugins {
+  const hasMath = containsMathSyntax(markdown);
+  const [, setLoadedVersion] = useState(0);
+
+  useEffect(() => {
+    if (!hasMath || mathMarkdownPlugins) return;
+    let cancelled = false;
+    loadMathMarkdownPlugins()
+      .then(() => {
+        if (!cancelled) setLoadedVersion((version) => version + 1);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [hasMath]);
+
+  return hasMath && mathMarkdownPlugins ? mathMarkdownPlugins : baseMarkdownPlugins;
+}
 
 export function normalizeDisplayMath(markdown: string): string {
   const lineBreak = markdown.includes("\r\n") ? "\r\n" : "\n";
@@ -160,17 +238,3 @@ function normalizeInlineLatexMath(line: string): string {
   );
 }
 
-export const markdownRemarkPlugins: ReactMarkdownOptions["remarkPlugins"] = [remarkGfm, remarkMath];
-export const markdownPreviewRemarkPlugins: ReactMarkdownOptions["remarkPlugins"] = [remarkGfm, remarkMath];
-
-export const markdownRehypePlugins: ReactMarkdownOptions["rehypePlugins"] = [
-  rehypeRaw,
-  [rehypeSanitize, markdownSanitizeSchema],
-  [rehypeKatex, { throwOnError: false, strict: false }],
-];
-
-export const markdownPreviewRehypePlugins: ReactMarkdownOptions["rehypePlugins"] = [
-  rehypeRaw,
-  [rehypeSanitize, markdownSanitizeSchema],
-  [rehypeKatex, { throwOnError: false, strict: false }],
-];

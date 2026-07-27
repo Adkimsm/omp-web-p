@@ -40,6 +40,7 @@ interface Props {
   modelNames?: Record<string, string>;
   modelList?: { id: string; name: string; provider: string }[];
   modelError?: string | null;
+  modelsLoading?: boolean;
   onModelChange?: (provider: string, modelId: string) => void;
   onCompact?: () => void;
   onAbortCompaction?: () => void;
@@ -103,13 +104,13 @@ function formatTokenCount(tokens: number, locale: string): string {
   return tokens.toLocaleString(locale);
 }
 
-type SlashCommandPaletteItem = SlashCommandInfo | {
-  name: string;
-  description: string;
-  source: "builtin";
-};
+type SlashCommandSource = "builtin" | "extension" | "prompt" | "skill" | "ompBuiltin";
 
-type SlashCommandSource = SlashCommandPaletteItem["source"];
+type SlashCommandPaletteItem = {
+  name: string;
+  description?: string;
+  source: SlashCommandSource;
+};
 
 const BUILTIN_SLASH_COMMAND_DEFS: { name: string; descriptionKey: string }[] = [
   { name: "compact", descriptionKey: "chatInput.cmdCompact" },
@@ -119,13 +120,16 @@ const BUILTIN_SLASH_COMMAND_DEFS: { name: string; descriptionKey: string }[] = [
   { name: "copy", descriptionKey: "chatInput.cmdCopy" },
 ];
 
-const SLASH_SOURCES: SlashCommandSource[] = ["builtin", "extension", "prompt", "skill"];
+const CLIENT_BUILTIN_COMMAND_NAMES = new Set(BUILTIN_SLASH_COMMAND_DEFS.map((def) => def.name));
+
+const SLASH_SOURCES: SlashCommandSource[] = ["builtin", "extension", "prompt", "skill", "ompBuiltin"];
 
 const SLASH_SOURCE_GROUP_LABEL_KEYS: Record<SlashCommandSource, string> = {
   builtin: "chatInput.groupBuiltin",
   extension: "chatInput.groupExtensions",
   prompt: "chatInput.groupPrompts",
   skill: "chatInput.groupSkills",
+  ompBuiltin: "chatInput.groupOmpBuiltin",
 };
 
 const SLASH_SOURCE_ORDER: Record<SlashCommandSource, number> = {
@@ -133,6 +137,7 @@ const SLASH_SOURCE_ORDER: Record<SlashCommandSource, number> = {
   extension: 1,
   prompt: 2,
   skill: 3,
+  ompBuiltin: 4,
 };
 
 function slashMatchRank(command: SlashCommandPaletteItem, query: string): number {
@@ -249,7 +254,7 @@ export function ModelErrorBanner({ error }: { error?: string | null }) {
 }
 
 export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
-  onSend, onAbort, onSteer, onFollowUp, isStreaming, model, isAutoModelSelection, modelNames, modelList, modelError, onModelChange,
+  onSend, onAbort, onSteer, onFollowUp, isStreaming, model, isAutoModelSelection, modelNames, modelList, modelError, modelsLoading, onModelChange,
   onCompact, onAbortCompaction, isCompacting, compactError, compactResult, toolPreset, onToolPresetChange,
   thinkingLevel, onThinkingLevelChange, availableThinkingLevels, thinkingLevelMap,
   retryInfo, queuedMessages, inputHistory = [], onRecallQueue,
@@ -509,9 +514,24 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     [t],
   );
 
+  // omp-reported builtin commands group separately below the other sources;
+  // names the web UI intercepts itself are dropped so each command appears
+  // exactly once and the client interception behavior is unchanged.
+  const externalSlashCommands: SlashCommandPaletteItem[] = React.useMemo(
+    () => (slashCommands ?? []).flatMap((command): SlashCommandPaletteItem[] => {
+      const source = command.source as string;
+      if (source === "builtin" || source === "ompBuiltin") {
+        if (CLIENT_BUILTIN_COMMAND_NAMES.has(command.name)) return [];
+        return [{ name: command.name, description: command.description, source: "ompBuiltin" }];
+      }
+      return [command];
+    }),
+    [slashCommands],
+  );
+
   const filteredSlashCommands = (() => {
     if (slashQuery === null) return [];
-    const commands = [...(isStreaming ? [] : builtinSlashCommands), ...(slashCommands ?? [])];
+    const commands = [...(isStreaming ? [] : builtinSlashCommands), ...externalSlashCommands];
     return [...commands]
       .filter((command) => {
         const name = command.name.toLowerCase();
@@ -986,6 +1006,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
     ? (modelOptions.find((o) => o.modelId === model.modelId && o.provider === model.provider)?.name ?? model.modelId)
     : null;
   const currentName = displayModelName;
+  // A failed load surfaces modelError; only an in-flight load shows the
+  // loading chip, so "no models" can only appear after the fetch settled.
+  const showModelsLoading = Boolean(modelsLoading) && !modelError;
+  const modelSelectorDisabled = isStreaming || (showModelsLoading && modelOptions.length === 0);
 
   const compactSavedTokens = compactResult
     ? Math.max(0, compactResult.tokensBefore - compactResult.estimatedTokensAfter)
@@ -1700,7 +1724,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               </svg>
             </button>
             {/* Model selector — visible always, disabled during streaming */}
-            {(modelOptions.length > 0 || currentName || modelError) && onModelChange && (
+            {(modelOptions.length > 0 || currentName || modelError || showModelsLoading) && onModelChange && (
                 <div ref={dropdownRef} style={{ position: "relative", flex: isMobile ? "1 1 auto" : undefined, minWidth: 0 }}>
                   <button
                     onClick={(e) => {
@@ -1708,7 +1732,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                       setModelDropdownRect({ top: rect.top, left: rect.left, width: rect.width });
                       setModelDropdownOpen((v) => !v);
                     }}
-                    disabled={isStreaming}
+                    disabled={modelSelectorDisabled}
                     style={{
                       display: "flex", alignItems: "center", gap: 6,
                       justifyContent: isMobile ? "flex-start" : undefined,
@@ -1721,9 +1745,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                       border: "none",
                       borderRadius: 9,
                       color: "var(--text-muted)",
-                      cursor: isStreaming ? "not-allowed" : "pointer",
+                      cursor: modelSelectorDisabled ? "not-allowed" : "pointer",
                       fontSize: 12,
-                      opacity: isStreaming ? 0.5 : 1,
+                      opacity: modelSelectorDisabled ? 0.5 : 1,
                       transition: "background 0.12s, color 0.12s",
                     }}
                     onMouseEnter={(e) => {
@@ -1735,7 +1759,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                       e.currentTarget.style.background = modelDropdownOpen ? "var(--bg-hover)" : "none";
                       e.currentTarget.style.color = "var(--text-muted)";
                     }}
-                    title={modelOptions.length > 0 ? t("chatInput.changeModel") : t("chatInput.noAvailableModels")}
+                    title={modelOptions.length > 0
+                      ? t("chatInput.changeModel")
+                      : showModelsLoading ? t("chatInput.loadingModels") : t("chatInput.noAvailableModels")}
                   >
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <rect x="4" y="4" width="16" height="16" rx="2" />
@@ -1746,7 +1772,9 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                       <line x1="1" y1="9" x2="4" y2="9" /><line x1="1" y1="14" x2="4" y2="14" />
                     </svg>
                     <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
-                      {currentName ?? (modelOptions.length > 0 ? t("chatInput.selectModel") : t("chatInput.noModels"))}
+                      {currentName ?? (modelOptions.length > 0
+                        ? t("chatInput.selectModel")
+                        : showModelsLoading ? t("chatInput.loadingModels") : t("chatInput.noModels"))}
                     </span>
                   </button>
                   {modelDropdownOpen && modelDropdownRect && (() => {
@@ -1769,7 +1797,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                       }}>
                       {modelsByProvider.length === 0 ? (
                         <div style={{ padding: "8px 12px", color: "var(--text-dim)", fontSize: 12, whiteSpace: "nowrap" }}>
-                          {t("chatInput.noAvailableModels")}
+                          {showModelsLoading ? t("chatInput.loadingModels") : t("chatInput.noAvailableModels")}
                         </div>
                       ) : modelsByProvider.map((group, gi) => (
                         <div key={group.provider}>
@@ -1970,10 +1998,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                           {isActive
                             ? <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><polyline points="1.5 5 4 7.5 8.5 2.5" /></svg>
                             : <span style={{ width: 10, flexShrink: 0 }} />}
-                          <span style={{ flex: 1 }}>
-                            {displayLabel}
-                            {showOriginal && <span style={{ fontSize: 10, color: "var(--text-dim)", fontFamily: "var(--font-mono)", marginLeft: 5 }}>({lvl})</span>}
-                          </span>
+                          <span style={{ flex: 1 }}>{displayLabel}{showOriginal && <span style={{ color: "var(--text-dim)", fontWeight: 400 }}> ({lvl})</span>}</span>
                           <span style={{ fontSize: 11, color: "var(--text-dim)", marginLeft: 8 }}>{desc}</span>
                         </button>
                       );

@@ -136,6 +136,7 @@ export async function GET(
     const searchParams = new URL(req.url).searchParams;
     const deferThinking = searchParams.has("deferThinking");
     const deferToolResultImages = searchParams.has("deferMedia");
+    const includeState = searchParams.has("includeState");
 
     const { header, entries, error: loadError } = loadSessionFile(filePath, {
       resolveBlobs: true,
@@ -177,6 +178,24 @@ export async function GET(
       parentSessionId,
     };
 
+    // ?includeState=1 inlines the wrapper's live agent state (same shape as
+    // GET /api/agent/[id]) so the client's post-turn refresh is one request
+    // instead of two. On a get_state failure the field is omitted entirely —
+    // callers treat a missing `agent` as "fetch it separately".
+    let agent: { running: boolean; state?: unknown } | undefined;
+    if (includeState) {
+      const rpc = getRpcSession(id);
+      if (rpc?.isAlive()) {
+        try {
+          agent = { running: true, state: await rpc.send({ type: "get_state" }) };
+        } catch {
+          // Leave agent unset; the session payload is still valid without it.
+        }
+      } else {
+        agent = { running: false };
+      }
+    }
+
     return NextResponse.json({
       sessionId: id,
       filePath,
@@ -184,6 +203,7 @@ export async function GET(
       leafId,
       tree,
       context,
+      ...(agent ? { agent } : {}),
     });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });

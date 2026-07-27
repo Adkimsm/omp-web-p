@@ -373,6 +373,26 @@ function base64ImageInfo(block: unknown): { bytes: number; mime?: string } | nul
   return { bytes: Math.max(0, Math.floor(data.length * 3 / 4) - padding), mime };
 }
 
+/**
+ * toolResult `details` is provider/tool-internal metadata that dominates real
+ * history payloads (measured 643KB of a 1.34MB context on a 533-entry session),
+ * and the history UI reads exactly two keys from it: details.patch and
+ * details.diff (components/MessageView.tsx getResultDiff). Serialization
+ * allowlists those keys — extend the allowlist if MessageView ever reads more.
+ * On-disk parsing (loadSessionFile/getSessionEntries) keeps full details.
+ */
+function stripToolResultDetails(message: AgentMessage): AgentMessage {
+  if (message.role !== "toolResult" || message.details === undefined) return message;
+  const { details, ...rest } = message;
+  if (isRecord(details)) {
+    const kept: Record<string, unknown> = {};
+    if (typeof details.patch === "string") kept.patch = details.patch;
+    if (typeof details.diff === "string") kept.diff = details.diff;
+    if (Object.keys(kept).length > 0) return { ...rest, details: kept };
+  }
+  return rest;
+}
+
 function omitToolResultBase64Images(message: AgentMessage): AgentMessage {
   if (message.role !== "toolResult") return message;
 
@@ -453,9 +473,10 @@ function entryToUiMessage(
           timestamp: raw.timestamp,
         };
       }
-      const message = options.deferToolResultImages
+      const normalized = options.deferToolResultImages
         ? omitToolResultBase64Images(normalizeToolCalls(raw))
         : normalizeToolCalls(raw);
+      const message = stripToolResultDetails(normalized);
       if (!options.deferThinking || message.role !== "assistant") return message;
       return {
         ...message,

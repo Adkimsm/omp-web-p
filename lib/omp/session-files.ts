@@ -905,6 +905,60 @@ export function scanSessionInfo(filePath: string, withStatus = true): OmpSession
   }
 }
 
+// Memo of per-file scan results keyed by (size, mtimeMs). The session list
+// cache is invalidated after every agent turn/rename/model change, so full
+// rescans are frequent; the memo turns each UNCHANGED file's prefix+suffix
+// window reads into a single stat. (path, size, mtimeMs) covers every session
+// mutation omp-web cares about. Stored on globalThis for hot-reload safety and
+// LRU-bounded (Map iteration order doubles as recency order).
+interface SessionScanCacheEntry {
+  size: number;
+  mtimeMs: number;
+  info: OmpSessionInfo;
+}
+
+declare global {
+  var __ompSessionScanCache: Map<string, SessionScanCacheEntry> | undefined;
+}
+
+const MAX_SESSION_SCAN_CACHE_ENTRIES = 2048;
+
+function getSessionScanCache(): Map<string, SessionScanCacheEntry> {
+  if (!globalThis.__ompSessionScanCache) globalThis.__ompSessionScanCache = new Map();
+  return globalThis.__ompSessionScanCache;
+}
+
+/** scanSessionInfo memoized on (path, size, mtimeMs). Callers must treat the
+ * returned info as immutable — cache hits share one object. */
+function scanSessionInfoCached(filePath: string): OmpSessionInfo | undefined {
+  let stat: { size: number; mtimeMs: number };
+  try {
+    stat = statSync(filePath);
+  } catch {
+    return undefined;
+  }
+  const cache = getSessionScanCache();
+  const cached = cache.get(filePath);
+  if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) {
+    cache.delete(filePath);
+    cache.set(filePath, cached);
+    return cached.info;
+  }
+  if (cached) cache.delete(filePath);
+  const info = scanSessionInfo(filePath, true);
+  // Failed scans are not negatively cached: a transient read error must not
+  // hide a session until its next mtime bump.
+  if (info) {
+    cache.set(filePath, { size: stat.size, mtimeMs: stat.mtimeMs, info });
+    while (cache.size > MAX_SESSION_SCAN_CACHE_ENTRIES) {
+      const oldestKey = cache.keys().next().value;
+      if (oldestKey === undefined) break;
+      cache.delete(oldestKey);
+    }
+  }
+  return info;
+}
+
 /**
  * List all sessions across all project subdirectories (newest first). Only
  * `<sessionsDir>/<projectDir>/*.jsonl` files are scanned — per-session
@@ -936,7 +990,7 @@ export async function listAllSessionInfos(): Promise<OmpSessionInfo[]> {
 
   const sessions: OmpSessionInfo[] = [];
   for (const file of files) {
-    const info = scanSessionInfo(file, true);
+    const info = scanSessionInfoCached(file);
     if (info) sessions.push(info);
   }
   sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());

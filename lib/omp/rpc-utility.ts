@@ -19,7 +19,10 @@ import { RpcProcess } from "./rpc-process";
 // either way (~3.6s with vs ~4.0s without over 4 runs each).
 const UTILITY_EXTRA_ARGS = ["--no-session", "--no-skills", "--no-lsp"];
 const READY_TIMEOUT_MS = 60_000;
-const IDLE_KILL_MS = 60_000;
+// Longer than the 60s models-cache TTL on purpose: with idle-kill == TTL every
+// pause past a minute paid a cold multi-second respawn on top of the stale
+// cache. Cost of the longer window is one idle omp process.
+const IDLE_KILL_MS = 300_000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 60_000;
 
 /** Minimal mirror of omp's Model (packages/catalog/src/types.ts) — only the

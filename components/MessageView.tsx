@@ -4,7 +4,6 @@ import { memo, useState, useRef, useEffect, useMemo } from "react";
 import { MarkdownBody } from "./MarkdownBody";
 import { copyText } from "@/lib/clipboard";
 import { translate, useI18n, type Locale } from "@/lib/i18n";
-import { formatApiError } from "@/lib/i18n/api-error";
 import { parseCompactionSummary } from "@/lib/compaction-summary";
 import { isEmptyThinkingBlock } from "@/lib/message-display";
 import { parseUnifiedPatch, type SplitDiffCell } from "@/lib/patch";
@@ -117,7 +116,7 @@ export const MessageView = memo(function MessageView({ message, isStreaming, too
     return <CustomMessageView message={message as CustomMessage} cwd={cwd} onOpenFile={onOpenFile} />;
   }
   if (message.role === "bashExecution") {
-    return <BashExecutionView message={message as BashExecutionMessage} sessionId={sessionId} />;
+    return <BashExecutionView message={message as BashExecutionMessage} />;
   }
   return null;
 }, (prev, next) => {
@@ -598,11 +597,21 @@ function BlockView({ block, toolResults, isStreaming, streamingDuration, toolCal
   return null;
 }
 
-function TextBlock({ block, isStreaming, cwd, onOpenFile }: { block: TextContent; isStreaming?: boolean; cwd?: string; onOpenFile?: (filePath: string) => void }) {
+// Every message_update frame delivers freshly parsed block objects, so the
+// block memos below compare content (text/thinking strings, tool call ids)
+// instead of object identity: finished blocks of the streaming message then
+// skip their ReactMarkdown re-parse and only the actively growing block
+// re-renders per frame.
+const TextBlock = memo(function TextBlock({ block, isStreaming, cwd, onOpenFile }: { block: TextContent; isStreaming?: boolean; cwd?: string; onOpenFile?: (filePath: string) => void }) {
   return <MarkdownBody isStreaming={isStreaming} cwd={cwd} onOpenFile={onOpenFile}>{block.text}</MarkdownBody>;
-}
+}, (prev, next) => (
+  prev.block.text === next.block.text
+  && prev.isStreaming === next.isStreaming
+  && prev.cwd === next.cwd
+  && prev.onOpenFile === next.onOpenFile
+));
 
-function ThinkingBlock({ block, duration, sessionId, entryId, blockIndex }: {
+const ThinkingBlock = memo(function ThinkingBlock({ block, duration, sessionId, entryId, blockIndex }: {
   block: ThinkingContent;
   duration?: number;
   sessionId?: string;
@@ -682,10 +691,17 @@ function ThinkingBlock({ block, duration, sessionId, entryId, blockIndex }: {
       )}
     </div>
   );
-}
+}, (prev, next) => (
+  prev.block.thinking === next.block.thinking
+  && prev.block.deferred === next.block.deferred
+  && prev.duration === next.duration
+  && prev.sessionId === next.sessionId
+  && prev.entryId === next.entryId
+  && prev.blockIndex === next.blockIndex
+));
 
 
-function ToolCallBlock({ block, result, duration }: { block: ToolCallContent; result?: ToolResultMessage; duration?: number }) {
+const ToolCallBlock = memo(function ToolCallBlock({ block, result, duration }: { block: ToolCallContent; result?: ToolResultMessage; duration?: number }) {
   const { t } = useI18n();
   const [expanded, setExpanded] = useState(false);
   const inputStr = JSON.stringify(block.input, null, 2);
@@ -777,7 +793,16 @@ function ToolCallBlock({ block, result, duration }: { block: ToolCallContent; re
       )}
     </div>
   );
-}
+}, (prev, next) => (
+  // Input compares by reference: a streaming tool call re-parses its input
+  // each frame (new object) and correctly re-renders; settled transcript
+  // blocks keep their identity and skip.
+  prev.block.toolCallId === next.block.toolCallId
+  && prev.block.toolName === next.block.toolName
+  && prev.block.input === next.block.input
+  && prev.result === next.result
+  && prev.duration === next.duration
+));
 
 interface ResultDiff {
   text: string;
@@ -1385,38 +1410,9 @@ function formatUsage(
   return parts.join(" · ");
 }
 
-function BashExecutionView({ message, sessionId }: { message: BashExecutionMessage; sessionId?: string }) {
-  const { t } = useI18n();
-  const [fullOutput, setFullOutput] = useState<string | null>(null);
-  const [loadingFull, setLoadingFull] = useState(false);
-  const [fullError, setFullError] = useState<string | null>(null);
-
+function BashExecutionView({ message }: { message: BashExecutionMessage }) {
   const isPending = !message.output && message.exitCode === undefined && !message.cancelled;
   const isError = message.cancelled || (message.exitCode !== undefined && message.exitCode !== 0);
-  const fullOutputUrl = sessionId && message.fullOutputPath
-    ? `/api/agent/${encodeURIComponent(sessionId)}/bash-output?path=${encodeURIComponent(message.fullOutputPath)}`
-    : null;
-  const showFullButton = message.truncated && fullOutputUrl && fullOutput === null;
-  const displayOutput = fullOutput ?? message.output;
-
-  async function loadFullOutput() {
-    if (!fullOutputUrl) return;
-    setLoadingFull(true);
-    setFullError(null);
-    try {
-      const res = await fetch(fullOutputUrl);
-      const d = await res.json() as { success?: boolean; data?: { output?: string }; error?: string };
-      if (d.success) {
-        setFullOutput(d.data?.output ?? "");
-      } else {
-        setFullError(formatApiError(d));
-      }
-    } catch (e) {
-      setFullError(String(e));
-    } finally {
-      setLoadingFull(false);
-    }
-  }
 
   // Reuse the existing ToolCallBlock so user-run bash looks identical to an
   // agent-run bash tool call: same header, collapse behavior, result pane.
@@ -1434,7 +1430,7 @@ function BashExecutionView({ message, sessionId }: { message: BashExecutionMessa
         role: "toolResult",
         toolCallId: block.toolCallId,
         toolName,
-        content: displayOutput ? [{ type: "text", text: displayOutput }] : [],
+        content: message.output ? [{ type: "text", text: message.output }] : [],
         isError,
         timestamp: message.timestamp,
       };
@@ -1442,26 +1438,6 @@ function BashExecutionView({ message, sessionId }: { message: BashExecutionMessa
   return (
     <div style={{ margin: "6px 0" }}>
       <ToolCallBlock block={block} result={result} />
-      {message.truncated && fullOutputUrl && (
-        <div style={{ padding: "4px 10px", fontSize: 11, marginTop: -1 }}>
-          {showFullButton && (
-            <button
-              onClick={loadFullOutput}
-              disabled={loadingFull}
-              style={{ background: "none", border: "none", color: "var(--accent)", cursor: loadingFull ? "default" : "pointer", fontSize: 11, padding: 0, textDecoration: "underline" }}
-            >
-              {loadingFull ? t("messageView.loadingFullOutput") : t("messageView.viewFullOutput")}
-            </button>
-          )}
-          <a
-            href={`${fullOutputUrl}&download=1`}
-            style={{ marginLeft: showFullButton ? 10 : 0, color: "var(--accent)", fontSize: 11, textDecoration: "underline" }}
-          >
-            {t("messageView.downloadFullOutput")}
-          </a>
-          {fullError && <span style={{ marginLeft: 6, color: "var(--text-dim)", fontSize: 11 }}>({fullError})</span>}
-        </div>
-      )}
     </div>
   );
 }

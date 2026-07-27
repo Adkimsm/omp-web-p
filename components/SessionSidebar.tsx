@@ -1694,11 +1694,14 @@ function SessionItem({
 }) {
   const { t, tn, locale } = useI18n();
   const [hovered, setHovered] = useState(false);
+  // Mirrors :focus-within so the hover-only action cluster is reachable by keyboard.
+  const [focusWithin, setFocusWithin] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const contentButtonRef = useRef<HTMLButtonElement>(null);
 
   const title = session.name || session.firstMessage.slice(0, 50) || session.id.slice(0, 12);
 
@@ -1745,6 +1748,7 @@ function SessionItem({
   const handleDeleteCancel = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     setConfirmDelete(false);
+    requestAnimationFrame(() => contentButtonRef.current?.focus());
   }, []);
 
   // Fixed-height outer wrapper — content swaps in place so the list never reflows
@@ -1755,6 +1759,17 @@ function SessionItem({
       onClick={confirmDelete || renaming ? undefined : onClick}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => { setHovered(false); }}
+      onFocus={() => setFocusWithin(true)}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFocusWithin(false);
+      }}
+      onKeyDown={(e) => {
+        if (confirmDelete && e.key === "Escape") {
+          e.stopPropagation();
+          setConfirmDelete(false);
+          requestAnimationFrame(() => contentButtonRef.current?.focus());
+        }
+      }}
       style={{
         height: ITEM_HEIGHT,
         display: "flex",
@@ -1802,6 +1817,7 @@ function SessionItem({
             </button>
             <button
               onClick={handleDeleteCancel}
+              autoFocus
               style={{
                 display: "flex", alignItems: "center", justifyContent: "center",
                 height: 30, padding: "0 11px",
@@ -1851,8 +1867,20 @@ function SessionItem({
               <path d="M18 9a9 9 0 0 1-9 9" />
             </svg>
           )}
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div
+          <button
+            ref={contentButtonRef}
+            type="button"
+            className="session-item-button"
+            aria-current={isSelected ? "true" : undefined}
+            onKeyDown={(e) => {
+              if (e.key === "Delete") {
+                e.preventDefault();
+                setConfirmDelete(true);
+              }
+            }}
+            style={{ flex: 1, minWidth: 0 }}
+          >
+            <span
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -1868,8 +1896,8 @@ function SessionItem({
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
                 {title}
               </span>
-            </div>
-            <div style={{ marginTop: 2, display: "flex", alignItems: "center", gap: 8, color: "var(--text-dim)", fontSize: 11, minWidth: 0 }}>
+            </span>
+            <span style={{ marginTop: 2, display: "flex", alignItems: "center", gap: 8, color: "var(--text-dim)", fontSize: 11, minWidth: 0 }}>
               {isRunning ? (
                 <RunningSessionIndicator />
               ) : isUnread ? (
@@ -1892,14 +1920,17 @@ function SessionItem({
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{session.worktreeBranch}</span>
                 </span>
               )}
-            </div>
-          </div>
+            </span>
+          </button>
 
           {/* Collapse toggle — always visible when has children */}
           {hasChildren && (
             <button
+              className="session-item-icon-button"
               onClick={(e) => { e.stopPropagation(); onToggleCollapse?.(); }}
               title={collapsed ? t("sessionSidebar.expandForks") : t("sessionSidebar.collapseForks")}
+              aria-label={collapsed ? t("sessionSidebar.expandForks") : t("sessionSidebar.collapseForks")}
+              aria-expanded={!collapsed}
               style={{
                 display: "flex", alignItems: "center", justifyContent: "center",
                 width: 20, height: 20, padding: 0, flexShrink: 0,
@@ -1915,12 +1946,14 @@ function SessionItem({
             </button>
           )}
 
-          {/* Action buttons — shown on hover */}
-          {hovered && (
+          {/* Action buttons — shown on hover or keyboard focus within the row */}
+          {(hovered || focusWithin) && (
             <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
               <button
+                className="session-item-icon-button"
                 onClick={startRename}
                 title={t("sessionSidebar.rename")}
+                aria-label={t("sessionSidebar.rename")}
                 style={{
                   display: "flex", alignItems: "center", justifyContent: "center",
                   width: 32, height: 32, padding: 0,
@@ -1945,8 +1978,10 @@ function SessionItem({
                 </svg>
               </button>
               <button
+                className="session-item-icon-button"
                 onClick={handleDeleteClick}
                 title={t("sessionSidebar.delete")}
+                aria-label={t("sessionSidebar.delete")}
                 style={{
                   display: "flex", alignItems: "center", justifyContent: "center",
                   width: 32, height: 32, padding: 0,

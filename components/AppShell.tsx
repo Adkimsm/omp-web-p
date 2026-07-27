@@ -1,15 +1,12 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
+import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useGlobalKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { SessionSidebar } from "./SessionSidebar";
 import { ChatWindow } from "./ChatWindow";
-import { FileViewer } from "./FileViewer";
 import { TabBar, type Tab } from "./TabBar";
-import { ModelsConfig } from "./ModelsConfig";
-import { SkillsConfig } from "./SkillsConfig";
-import { PluginsConfig } from "./PluginsConfig";
 import { BranchNavigator } from "./BranchNavigator";
 import { LanguageSwitcher } from "./LanguageSwitcher";
 import { useTheme } from "@/hooks/useTheme";
@@ -23,6 +20,44 @@ import { getInitialNavigation } from "@/lib/initial-navigation";
 import type { SessionInfo, SessionTreeNode } from "@/lib/types";
 import type { ChatInputHandle } from "./ChatInput";
 import type { SessionStatsInfo } from "@/lib/pi-types";
+
+// Loaded on demand: the config modals open on click and the file viewer only
+// renders once a file tab exists, so none of them belong in the first-load chunk.
+const FileViewer = dynamic(() => import("./FileViewer").then((m) => m.FileViewer), {
+  ssr: false,
+  loading: () => <PanelLoadingFallback />,
+});
+const ModelsConfig = dynamic(() => import("./ModelsConfig").then((m) => m.ModelsConfig), {
+  ssr: false,
+  loading: () => <ModalLoadingFallback />,
+});
+const SkillsConfig = dynamic(() => import("./SkillsConfig").then((m) => m.SkillsConfig), {
+  ssr: false,
+  loading: () => <ModalLoadingFallback />,
+});
+const PluginsConfig = dynamic(() => import("./PluginsConfig").then((m) => m.PluginsConfig), {
+  ssr: false,
+  loading: () => <ModalLoadingFallback />,
+});
+
+function PanelLoadingFallback() {
+  const { t } = useI18n();
+  return (
+    <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)", fontSize: 12 }}>
+      {t("appShell.loading")}
+    </div>
+  );
+}
+
+// Mirrors the config modals' backdrop so the click feels instant while the chunk loads.
+function ModalLoadingFallback() {
+  const { t } = useI18n();
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-dim)", fontSize: 12 }}>
+      {t("appShell.loading")}
+    </div>
+  );
+}
 
 type SessionCopyField = "file" | "id";
 type AutoNameStatus =

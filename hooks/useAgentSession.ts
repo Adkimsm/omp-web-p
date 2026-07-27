@@ -12,8 +12,9 @@ import type {
 import { normalizeToolCalls } from "@/lib/normalize";
 import { sendAgentCommand } from "@/lib/agent-client";
 import { translate } from "@/lib/i18n";
+import { createMessageUpdateCoalescer, type MessageUpdateCoalescer } from "@/lib/message-update-coalescer";
 import { getToolNamesForPreset } from "@/lib/tool-presets";
-import type { RpcAvailableSlashCommand, SessionStatsInfo } from "@/lib/pi-types";
+import type { RpcAvailableSlashCommand, SessionStatsInfo, TodoPhase } from "@/lib/pi-types";
 
 export interface SessionData {
   sessionId: string;
@@ -80,6 +81,7 @@ type AgentStateResponse = {
   extensionWidgets?: ExtensionWidgetItem[];
   // omp only reports a count; the queued texts are tracked client-side.
   queuedMessageCount?: number;
+  todoPhases?: TodoPhase[];
 };
 
 export interface QueuedMessages {
@@ -89,6 +91,65 @@ export interface QueuedMessages {
 
 const EMPTY_QUEUE: QueuedMessages = { steering: [], followUp: [] };
 
+// omp reports only queuedMessageCount over RPC; the queued texts live in React
+// state and would vanish on reload. Mirror them into sessionStorage (per
+// session, best-effort, size-bounded) so a reload can restore the queue panel.
+const QUEUE_STORAGE_PREFIX = "omp-queue-";
+const QUEUE_STORAGE_MAX_CHARS = 50_000;
+
+function isEmptyQueue(queue: QueuedMessages): boolean {
+  return queue.steering.length === 0 && queue.followUp.length === 0;
+}
+
+function readPersistedQueue(sessionId: string): QueuedMessages | null {
+  try {
+    const raw = sessionStorage.getItem(QUEUE_STORAGE_PREFIX + sessionId);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<QueuedMessages> | null;
+    const onlyStrings = (value: unknown): string[] =>
+      Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+    const queue = { steering: onlyStrings(parsed?.steering), followUp: onlyStrings(parsed?.followUp) };
+    return isEmptyQueue(queue) ? null : queue;
+  } catch {
+    return null;
+  }
+}
+
+function persistQueue(sessionId: string, queue: QueuedMessages): void {
+  try {
+    const key = QUEUE_STORAGE_PREFIX + sessionId;
+    if (isEmptyQueue(queue)) {
+      sessionStorage.removeItem(key);
+      return;
+    }
+    // Size bound: drop oldest texts until the payload fits.
+    let bounded = queue;
+    let raw = JSON.stringify(bounded);
+    while (raw.length > QUEUE_STORAGE_MAX_CHARS && bounded.steering.length + bounded.followUp.length > 1) {
+      bounded = bounded.steering.length >= bounded.followUp.length
+        ? { ...bounded, steering: bounded.steering.slice(1) }
+        : { ...bounded, followUp: bounded.followUp.slice(1) };
+      raw = JSON.stringify(bounded);
+    }
+    if (raw.length > QUEUE_STORAGE_MAX_CHARS) {
+      sessionStorage.removeItem(key);
+      return;
+    }
+    sessionStorage.setItem(key, raw);
+  } catch {
+    // Best-effort only (quota exceeded, private mode, SSR).
+  }
+}
+
+function clearPersistedQueue(sessionId: string | null): void {
+  if (!sessionId) return;
+  try {
+    sessionStorage.removeItem(QUEUE_STORAGE_PREFIX + sessionId);
+  } catch {
+    // ignore storage errors
+  }
+}
+
 function normalizeThinkingLevel(level: string | undefined): ThinkingLevelOption {
   // omp's "inherit" sentinel means "no explicit selection" — show as auto.
   if (!level || level === "inherit") return "auto";
@@ -96,7 +157,6 @@ function normalizeThinkingLevel(level: string | undefined): ThinkingLevelOption 
 }
 
 type ExtensionUiDialogRequest = Extract<ExtensionUiRequest, { method: "select" | "confirm" | "input" | "editor" }>;
-type ExtensionUiCustomRequest = Extract<ExtensionUiRequest, { method: "custom" }>;
 // omp's rpc-ui frames add open_url (OAuth) and cancel on top of lib/types' union.
 type IncomingExtensionUiRequest =
   | ExtensionUiRequest
@@ -400,10 +460,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [noticeState, dispatchNotice] = useReducer(noticeReducer, { visible: [], pending: [] });
   const [sessionStatsOverride, setSessionStatsOverride] = useState<SessionStatsInfo | null>(null);
   const [extensionDialog, setExtensionDialog] = useState<ExtensionUiDialogRequest | null>(null);
-  const [extensionCustomUi, setExtensionCustomUi] = useState<ExtensionUiCustomRequest | null>(null);
   const [extensionStatuses, setExtensionStatuses] = useState<ExtensionStatusItem[]>([]);
   const [extensionWidgets, setExtensionWidgets] = useState<ExtensionWidgetItem[]>([]);
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessages>({ steering: [], followUp: [] });
+  const [activeSubagentCount, setActiveSubagentCount] = useState(0);
+  const [todoPhases, setTodoPhases] = useState<TodoPhase[]>([]);
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const sessionIdRef = useRef<string | null>(session?.id ?? null);
@@ -424,6 +485,17 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const newSessionPromotedRef = useRef(false);
   const promptRunIdRef = useRef(0);
   const optimisticUserMessageKeyRef = useRef<string | null>(null);
+  const activeSubagentIdsRef = useRef<Set<string>>(new Set());
+  // True once this mount has persisted a non-empty queue: gates removal so a
+  // just-mounted empty state cannot wipe a stored queue before restore runs.
+  const queuePersistDirtyRef = useRef(false);
+  const eventCoalescerRef = useRef<MessageUpdateCoalescer | null>(null);
+  if (eventCoalescerRef.current === null) {
+    eventCoalescerRef.current = createMessageUpdateCoalescer((event) => {
+      handleAgentEventRef.current?.(event as AgentEvent);
+    });
+  }
+  const eventCoalescer = eventCoalescerRef.current;
 
   const setToolPresetState = opts.setToolPreset ?? setToolPreset;
 
@@ -468,6 +540,20 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       ...(contextUsage ? { contextUsage } : {}),
     } satisfies SessionStatsInfo;
   }, [messages, sessionStatsOverride, contextUsage, data?.filePath, session?.id, session?.name]);
+
+  // First phase that still has unfinished work; null once everything is done
+  // (or no todo list exists), which hides the status-line suffix.
+  const currentTodoPhase = useMemo(() => {
+    for (let index = 0; index < todoPhases.length; index++) {
+      const phase = todoPhases[index];
+      const tasks = Array.isArray(phase?.tasks) ? phase.tasks : [];
+      const done = tasks.filter((task) => task.status === "completed" || task.status === "abandoned").length;
+      if (done < tasks.length) {
+        return { name: phase.name, index: index + 1, phaseCount: todoPhases.length, done, total: tasks.length };
+      }
+    }
+    return null;
+  }, [todoPhases]);
 
   const loadSession = useCallback(async (sid: string, showLoading = false, includeState = false) => {
     let messagesLoaded = false;
@@ -514,6 +600,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (liveState.thinkingLevel !== undefined) setThinkingLevel(normalizeThinkingLevel(liveState.thinkingLevel));
           if (liveState.extensionStatuses !== undefined) setExtensionStatuses(liveState.extensionStatuses ?? []);
           if (liveState.extensionWidgets !== undefined) setExtensionWidgets(liveState.extensionWidgets ?? []);
+          if (liveState.todoPhases !== undefined) setTodoPhases(liveState.todoPhases ?? []);
           if (liveState.queuedMessageCount === 0) setQueuedMessages(EMPTY_QUEUE);
         } else if (!agentState.running) {
           setQueuedMessages(EMPTY_QUEUE);
@@ -631,6 +718,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       eventSourceRef.current.close();
       eventSourceRef.current = null;
     }
+    // A pending coalesced update belongs to the stream being replaced.
+    eventCoalescer.reset();
     const es = new EventSource(`/api/agent/${encodeURIComponent(sid)}/events`);
     eventSourceRef.current = es;
 
@@ -652,7 +741,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         try {
           const event = JSON.parse(e.data) as AgentEvent;
           if (event.type === "connected") settle("connected");
-          handleAgentEventRef.current?.(event);
+          // message_update frames arrive at network rate (often 30-100+/s);
+          // the coalescer buffers the latest one and dispatches at display
+          // rate, flushing synchronously before any other event type.
+          eventCoalescer.push(event);
         } catch {
           // ignore
         }
@@ -675,7 +767,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         // connection must be ready before they continue.
       };
     });
-  }, []);
+  }, [eventCoalescer]);
 
   const respondToExtensionUi = useCallback(async (
     request: ExtensionUiDialogRequest,
@@ -692,20 +784,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       });
     } catch (e) {
       console.error("Failed to send extension UI response:", e);
-    }
-  }, []);
-
-  const sendExtensionCustomInput = useCallback(async (request: ExtensionUiCustomRequest, data: string) => {
-    const sid = sessionIdRef.current;
-    if (!sid) return;
-    try {
-      await sendAgentCommand(sid, {
-        type: "extension_ui_input",
-        id: request.id,
-        data,
-      });
-    } catch (e) {
-      console.error("Failed to send extension custom UI input:", e);
     }
   }, []);
 
@@ -801,12 +879,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       case "set_editor_text":
         opts.chatInputRef?.current?.insertText(request.text);
         break;
-      case "custom":
-        setExtensionCustomUi((current) => {
-          if (request.closed) return current?.id === request.id ? null : current;
-          return request;
-        });
-        break;
     }
   }, [addNotice, opts.chatInputRef]);
 
@@ -824,6 +896,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       setAgentRunning(false);
       setAgentPhase(null);
       setRetryInfo(null);
+      activeSubagentIdsRef.current.clear();
+      setActiveSubagentCount(0);
       dispatch({ type: "end" });
       onAgentEnd?.();
     }
@@ -901,6 +975,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       // would otherwise leave the "Stop compaction" UI stuck. No state
       // (wrapper destroyed) means nothing is compacting.
       setIsCompacting(state?.isCompacting ?? false);
+      // Also mid-run: this poll is the only todo-phase refresh while streaming.
+      if (state?.todoPhases !== undefined) setTodoPhases(state.todoPhases ?? []);
       if (!state || state.queuedMessageCount === 0) setQueuedMessages(EMPTY_QUEUE);
       const busy = data.running && state
         && (state.isStreaming || state.isPromptRunning || state.isCompacting);
@@ -956,6 +1032,18 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     });
   }, []);
 
+  // Mirror queued texts into sessionStorage so a reload can restore them.
+  // The dirty gate keeps the initial empty state from wiping a stored queue
+  // before the mount-time restore has run.
+  useEffect(() => {
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+    const empty = isEmptyQueue(queuedMessages);
+    if (empty && !queuePersistDirtyRef.current) return;
+    queuePersistDirtyRef.current = !empty;
+    persistQueue(sid, queuedMessages);
+  }, [queuedMessages]);
+
   const handleAgentEvent = useCallback((event: AgentEvent) => {
     switch (event.type) {
       case "agent_start":
@@ -974,6 +1062,8 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         setAgentRunning(false);
         setAgentPhase(null);
         setRetryInfo(null);
+        activeSubagentIdsRef.current.clear();
+        setActiveSubagentCount(0);
         dispatch({ type: "end" });
         if (sessionIdRef.current) {
           loadSession(sessionIdRef.current);
@@ -984,6 +1074,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
               if (d.state?.systemPrompt !== undefined) setSystemPrompt(d.state.systemPrompt || null);
               if (d.state?.extensionStatuses !== undefined) setExtensionStatuses(d.state.extensionStatuses ?? []);
               if (d.state?.extensionWidgets !== undefined) setExtensionWidgets(d.state.extensionWidgets ?? []);
+              if (d.state?.todoPhases !== undefined) setTodoPhases(d.state.todoPhases ?? []);
               // omp reports only a queued count; an empty (or dead) session
               // means the client-tracked queue texts are stale.
               if (!d.state || d.state.queuedMessageCount === 0) setQueuedMessages(EMPTY_QUEUE);
@@ -1116,6 +1207,19 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (sessionIdRef.current) loadSession(sessionIdRef.current);
         }
         break;
+      case "subagent_lifecycle": {
+        // Display-only counter for the status line. Defensive parsing: an omp
+        // protocol change degrades to showing nothing, never breaks the run.
+        const payload = event.payload as { id?: unknown; status?: unknown } | undefined;
+        const id = typeof payload?.id === "string" ? payload.id : null;
+        const status = typeof payload?.status === "string" ? payload.status : null;
+        if (!id || !status) break;
+        const ids = activeSubagentIdsRef.current;
+        if (status === "started") ids.add(id);
+        else ids.delete(id);
+        setActiveSubagentCount(ids.size);
+        break;
+      }
       case "extension_ui_request":
         handleExtensionUiRequest(event as unknown as IncomingExtensionUiRequest);
         break;
@@ -1626,12 +1730,25 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (agentState.state.thinkingLevel !== undefined) setThinkingLevel(normalizeThinkingLevel(agentState.state.thinkingLevel));
           if (agentState.state.extensionStatuses !== undefined) setExtensionStatuses(agentState.state.extensionStatuses ?? []);
           if (agentState.state.extensionWidgets !== undefined) setExtensionWidgets(agentState.state.extensionWidgets ?? []);
-          if (agentState.state.queuedMessageCount === 0) setQueuedMessages(EMPTY_QUEUE);
+          if (agentState.state.queuedMessageCount === 0) {
+            setQueuedMessages(EMPTY_QUEUE);
+            // The queue drained while the page was closed — a stored copy
+            // from a previous page load is stale.
+            clearPersistedQueue(session.id);
+          } else if (typeof agentState.state.queuedMessageCount === "number") {
+            // omp still holds queued messages: restore the client-tracked
+            // texts persisted by the previous page load.
+            const persisted = readPersistedQueue(session.id);
+            if (persisted) {
+              setQueuedMessages((prev) => (isEmptyQueue(prev) ? persisted : prev));
+            }
+          }
         }
       });
     }
     return () => {
       bashRecoveryIdRef.current += 1;
+      eventCoalescerRef.current?.reset();
       eventSourceRef.current?.close();
       eventSourceRef.current = null;
     };
@@ -1734,9 +1851,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     retryInfo, contextUsage, systemPrompt, forkingEntryId,
     isCompacting, compactError, compactResult, currentModel, displayModel, sessionStats,
     slashCommands, slashCommandsLoading, queuedMessages,
-    notices: noticeState.visible, extensionDialog, extensionCustomUi, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput,
+    notices: noticeState.visible, extensionDialog, extensionStatuses, extensionWidgets, respondToExtensionUi,
     isAutoModelSelection: isNew && newSessionModel === null,
     agentPhase,
+    activeSubagentCount, currentTodoPhase,
     isNew,
     // Refs
     sessionIdRef, eventSourceRef, messagesEndRef, scrollContainerRef,
