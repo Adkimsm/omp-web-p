@@ -20,6 +20,8 @@ const nextConfig: NextConfig = {
       {
         // Hashed build output never changes, so browsers/proxies may cache it
         // immutably for a year and skip revalidation entirely.
+        // NOTE: scoped to /_next/static/ only — broader /_next/ patterns would
+        // shadow the HMR WebSocket in development.
         source: "/_next/static/:path*",
         headers: [
           { key: "Cache-Control", value: "public, max-age=31536000, immutable" },
