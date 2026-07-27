@@ -575,7 +575,7 @@ export function AppShell() {
           transform: translateY(0);
           filter: blur(0);
           background: color-mix(in srgb, var(--accent) 8%, var(--bg-panel));
-          box-shadow: 0 18px 44px rgba(37,99,235,0.16);
+          box-shadow: 0 18px 44px rgba(176,62,34,0.16);
         }
         100% {
           opacity: 1;
@@ -1234,8 +1234,8 @@ export function AppShell() {
             </div>
           ) : showPlaceholder ? (
             activeCwd ? (
-              <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", fontSize: 15 }}>
-                {t("appShell.selectSessionHint")}
+              <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", fontSize: 16 }}>
+                <span className="display-serif">{t("appShell.selectSessionHint")}</span>
               </div>
             ) : (
               <div style={{ position: "absolute", top: 12, left: 12, display: "flex", alignItems: "flex-start", gap: 8, userSelect: "none", pointerEvents: "none" }}>
@@ -1243,7 +1243,7 @@ export function AppShell() {
                   <line x1="20" y1="12" x2="4" y2="12" /><polyline points="10 6 4 12 10 18" />
                 </svg>
                 <div>
-                  <div style={{ fontSize: 18, fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>{t("appShell.getStarted")}</div>
+                  <div className="display-serif" style={{ fontSize: 20, color: "var(--text)", marginBottom: 8 }}>{t("appShell.getStarted")}</div>
                   <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.8 }}>
                     <span style={{ color: "var(--text-dim)", marginRight: 6 }}>1.</span>{t("appShell.getStartedStep1")}<br />
                     <span style={{ color: "var(--text-dim)", marginRight: 6 }}>2.</span>

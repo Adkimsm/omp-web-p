@@ -1533,6 +1533,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
             );
           })()}
           <div
+            className="chat-input-shell"
             style={{
               display: "flex",
               gap: 8,
@@ -1541,10 +1542,10 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
               border: `1px solid ${bashMode ? "var(--tool-bg)" : isStreaming && (onSteer || onFollowUp)
                 ? "rgba(234,179,8,0.4)"
                 : "color-mix(in srgb, var(--border) 70%, transparent)"}`,
-              borderRadius: 14,
+              borderRadius: "var(--radius-card)",
               padding: "10px 10px 10px 14px",
-              boxShadow: "0 1px 2px rgba(15,23,42,0.04), 0 8px 24px -12px rgba(15,23,42,0.10)",
-              transition: "border-color 0.15s, background 0.15s, box-shadow 0.15s",
+              boxShadow: "var(--shadow-card)",
+              transition: "border-color var(--dur-fast) var(--ease-out-warm), background var(--dur-fast) var(--ease-out-warm), box-shadow var(--dur-fast) var(--ease-out-warm)",
             } as React.CSSProperties}
           >
           <textarea
@@ -1661,7 +1662,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 fontSize: 13,
                 fontWeight: 600,
                 letterSpacing: "-0.01em",
-                boxShadow: (value.trim() || attachedImages.length) ? "0 1px 3px rgba(37,99,235,0.25)" : "none",
+                boxShadow: (value.trim() || attachedImages.length) ? "0 1px 3px rgba(176,62,34,0.25)" : "none",
                 transition: "background 0.15s, box-shadow 0.15s",
               }}
             >

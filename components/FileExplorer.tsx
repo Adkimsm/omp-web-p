@@ -302,7 +302,7 @@ function TreeNode({
           <span
             title={t("fileExplorer.newlyUploaded")}
             aria-label={t("fileExplorer.newlyUploaded")}
-            style={{ width: 6, height: 6, flexShrink: 0, borderRadius: "50%", background: "#3b82f6" }}
+            style={{ width: 6, height: 6, flexShrink: 0, borderRadius: "50%", background: "var(--accent)" }}
           />
         )}
         {!hovered && !node.isDir && gitStatus && (

@@ -1,10 +1,28 @@
 import type { Metadata, Viewport } from "next";
-import { Noto_Sans_Mono } from "next/font/google";
+import { Noto_Sans_Mono, Noto_Serif_SC, Source_Serif_4 } from "next/font/google";
 import "./globals.css";
 
 const notoSansMono = Noto_Sans_Mono({
   subsets: ["latin", "cyrillic"],
   variable: "--font-noto-mono",
+  display: "swap",
+});
+
+// Display serif pair for the warm-humanistic heading voice: Source Serif 4
+// covers latin, Noto Serif SC covers CJK. Both expose CSS variables consumed
+// by --font-serif in globals.css.
+const sourceSerif = Source_Serif_4({
+  subsets: ["latin"],
+  variable: "--font-source-serif",
+  display: "swap",
+});
+
+const notoSerifSC = Noto_Serif_SC({
+  // CJK glyphs are served via unicode-range slices regardless of subset;
+  // "latin" satisfies next/font's preloading requirement.
+  subsets: ["latin"],
+  weight: ["600", "700"],
+  variable: "--font-noto-serif",
   display: "swap",
 });
 
@@ -30,8 +48,8 @@ export const viewport: Viewport = {
   initialScale: 1,
   viewportFit: "cover",
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
-    { media: "(prefers-color-scheme: dark)", color: "#1a1a1a" },
+    { media: "(prefers-color-scheme: light)", color: "#FAF9F6" },
+    { media: "(prefers-color-scheme: dark)", color: "#1B1916" },
   ],
 };
 
@@ -41,7 +59,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" translate="no" className={`${notoSansMono.variable} notranslate`} suppressHydrationWarning>
+    <html lang="en" translate="no" className={`${notoSansMono.variable} ${sourceSerif.variable} ${notoSerifSC.variable} notranslate`} suppressHydrationWarning>
       <head>
         <meta name="google" content="notranslate" />
         {/* Pre-hydration: apply stored theme before first paint to avoid a flash

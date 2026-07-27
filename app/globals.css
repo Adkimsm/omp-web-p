@@ -17,56 +17,79 @@
   --color-tool-bg: var(--tool-bg);
   --color-bg-subtle: var(--bg-subtle);
   --font-mono-font: var(--font-mono);
+  --font-serif-display: var(--font-serif);
 }
 
+/* Warm-paper palette (light). All text/background pairs verified WCAG AA
+   (≥4.5:1 for small text) — measured values noted per token. */
 :root {
-  --bg: #ffffff;
-  --bg-panel: #f5f5f5;
-  --bg-hover: #eeeeee;
-  --bg-selected: #e8e8e8;
-  --border: #e0e0e0;
-  --text: #1a1a1a;
-  /* WCAG AA: 6.21:1 on --bg, 5.79:1 on --bg-panel, 5.35:1 on --bg-hover (all pass
-     4.5:1 even for small text; #67707e failed at 4.31 on hover backgrounds). */
-  --text-muted: #58626d;
-  /* WCAG AA: 6.50:1 on --bg, 6.07:1 on --bg-panel; slightly darker than --text-muted. */
-  --text-dim: #555f6a;
-  --accent: #2563eb;
-  /* Filled buttons with white text: #2563eb gives white-on-fill 5.17:1 (passes AA).
-     Mirrors --accent here since light accent already passes for both uses. */
-  --accent-strong: #2563eb;
-  --accent-hover: #1d4ed8;
-  --user-bg: #eff6ff;
-  --assistant-bg: #ffffff;
-  --tool-bg: #f9fafb;
-  --bg-subtle: rgba(0,0,0,0.03);
+  --bg: #FAF9F6;
+  --bg-panel: #F2F0EA;
+  --bg-hover: #EAE7DF;
+  --bg-selected: #E5E0D4;
+  --border: #E2DDD2;
+  /* 13.94:1 on --bg, 12.88:1 on --bg-panel */
+  --text: #2B2823;
+  /* 5.65:1 on --bg, 5.22:1 on --bg-panel, 4.81:1 on --bg-hover */
+  --text-muted: #69635A;
+  /* 5.58:1 on --bg, 5.15:1 on --bg-panel, 4.75:1 on --bg-hover (darker than
+     muted by design — mirrors the previous palette's dim<muted relationship) */
+  --text-dim: #6A6458;
+  /* Terracotta. 5.61:1 as link on --bg, 5.18:1 on --bg-panel, 5.08:1 on --user-bg */
+  --accent: #B03E22;
+  /* White-on-fill button: 5.90:1 (passes AA for small text) */
+  --accent-strong: #B03E22;
+  --accent-hover: #96331B;
+  --user-bg: #F5EDE1;
+  --assistant-bg: #FAF9F6;
+  --tool-bg: #F6F3ED;
+  --bg-subtle: rgba(60,50,35,0.04);
 }
 
+/* Warm-ember palette (dark). Same AA verification as light. */
 html.dark {
-  --bg: #1a1a1a;
-  --bg-panel: #242424;
-  --bg-hover: #2e2e2e;
-  --bg-selected: #383838;
-  --border: #3a3a3a;
-  --text: #e8e8e8;
-  /* WCAG AA: 6.86:1 on --bg, 6.11:1 on --bg-panel. */
-  --text-muted: #9ca3af;
-  /* WCAG AA: 5.62:1 on --bg, 5.02:1 on --bg-panel; darker than --text-muted. */
-  --text-dim: #8b93a1;
-  /* Used for links/colored text on dark backgrounds: 6.85:1 on --bg (passes AA).
-     NOTE: as a button background with white text this is 2.54:1 (below AA).
-     A blue cannot simultaneously pass as a dark-bg link AND a white-text button
-     fill, so accent buttons opt into a dedicated --accent-strong below. */
-  --accent: #60a5fa;
-  /* Button-fill blue for white text: #3b82f6 gives white-on-fill 3.68:1
-     (large-text AA at 3:1) while keeping 4.73:1 as a link on --bg. Used by
-     filled buttons; component-level where needed. */
-  --accent-strong: #3b82f6;
-  --accent-hover: #93c5fd;
-  --user-bg: #1e293b;
-  --assistant-bg: #1a1a1a;
-  --tool-bg: #1f2937;
-  --bg-subtle: rgba(255,255,255,0.04);
+  --bg: #1B1916;
+  --bg-panel: #231F1B;
+  --bg-hover: #2B2721;
+  --bg-selected: #332E26;
+  --border: #38322B;
+  /* 14.10:1 on --bg, 13.16:1 on --bg-panel */
+  --text: #EBE6DC;
+  /* 6.38:1 on --bg, 5.95:1 on --bg-panel, 5.40:1 on --bg-hover */
+  --text-muted: #A39B8E;
+  /* 5.27:1 on --bg, 4.92:1 on --bg-panel */
+  --text-dim: #938C81;
+  /* Lifted terracotta for dark surfaces: 5.96:1 as link on --bg.
+     As a white-text button fill it would fail AA, so filled buttons use
+     --accent-strong below (same split as the previous palette). */
+  --accent: #E07B54;
+  /* White-on-fill: 4.56:1 (passes AA) */
+  --accent-strong: #C2542E;
+  --accent-hover: #E89371;
+  --user-bg: #2C2721;
+  --assistant-bg: #1B1916;
+  --tool-bg: #26221D;
+  --bg-subtle: rgba(235,225,210,0.05);
+}
+
+/* Shape / elevation / motion tokens (warm-humanistic system). */
+:root {
+  --radius-control: 8px;
+  --radius-card: 12px;
+  --radius-modal: 16px;
+  /* Warm diffuse shadows (light); dark theme swaps to ambient glow below. */
+  --shadow-card: 0 1px 2px rgba(60,50,35,0.05), 0 2px 8px rgba(60,50,35,0.06);
+  --shadow-pop: 0 2px 6px rgba(60,50,35,0.07), 0 8px 24px rgba(60,50,35,0.10);
+  --shadow-modal: 0 4px 12px rgba(60,50,35,0.08), 0 16px 48px rgba(60,50,35,0.14);
+  --ease-out-warm: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-fast: 150ms;
+  --dur-med: 220ms;
+  --dur-slow: 320ms;
+}
+html.dark {
+  --shadow-card: 0 1px 2px rgba(0,0,0,0.35), 0 0 0 1px rgba(235,225,210,0.03);
+  --shadow-pop: 0 2px 8px rgba(0,0,0,0.45), 0 0 0 1px rgba(235,225,210,0.04);
+  --shadow-modal: 0 8px 32px rgba(0,0,0,0.55), 0 0 0 1px rgba(235,225,210,0.05);
 }
 
 /* Theme toggle: circular wipe via View Transitions API.
@@ -148,10 +171,20 @@ body {
 
 :root {
   --font-mono: var(--font-noto-mono), 'JetBrains Mono', 'Fira Code', 'Consolas', ui-monospace, 'PingFang SC', 'Microsoft YaHei', monospace;
+  /* Display serif for headings / session titles / modal titles / empty states.
+     Falls back to system serifs if the webfont fails. */
+  --font-serif: var(--font-source-serif), var(--font-noto-serif), Georgia, 'Songti SC', 'SimSun', serif;
 }
 
 pre, code {
   font-family: var(--font-mono);
+}
+
+/* Serif display utility: opt-in via class on headings, titles, empty states. */
+.display-serif {
+  font-family: var(--font-serif);
+  font-weight: 600;
+  letter-spacing: 0.005em;
 }
 
 /* react-markdown output styles */
@@ -165,11 +198,12 @@ pre, code {
 .markdown-body p:last-child { margin-bottom: 0; }
 .markdown-body h1, .markdown-body h2, .markdown-body h3,
 .markdown-body h4, .markdown-body h5, .markdown-body h6 {
+  font-family: var(--font-serif);
   font-weight: 600;
   margin: 10px 0 5px;
   color: var(--text);
   line-height: 1.35;
-  letter-spacing: 0;
+  letter-spacing: 0.005em;
 }
 .markdown-body h1 { font-size: 1.16em; }
 .markdown-body h2 { font-size: 1.08em; }
@@ -873,6 +907,12 @@ span.linenumber {
   background-size: 200% 100%;
   animation: skeleton-shimmer 1.6s ease-in-out infinite;
   border-radius: 6px;
+}
+
+/* Chat input shell: warm focus glow when the textarea inside receives focus. */
+.chat-input-shell:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent) !important;
+  box-shadow: var(--shadow-card), 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent) !important;
 }
 
 /* Fade + scale/slide entrance utilities for dropdowns, popovers, panels. */

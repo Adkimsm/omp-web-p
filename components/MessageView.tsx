@@ -188,8 +188,9 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
             flex: 1,
             minWidth: 0,
             background: "var(--user-bg)",
-            border: "1px solid rgba(59,130,246,0.2)",
-            borderRadius: 12,
+            border: "1px solid color-mix(in srgb, var(--accent) 28%, transparent)",
+            borderRadius: "var(--radius-card)",
+            boxShadow: "var(--shadow-card)",
             padding: "8px 12px",
             fontSize: 14,
             lineHeight: 1.6,
@@ -216,7 +217,7 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
                     key={i}
                     src={src}
                     alt=""
-                    style={{ maxWidth: 240, maxHeight: 240, borderRadius: 6, objectFit: "contain", display: "block", border: "1px solid rgba(59,130,246,0.15)" }}
+                    style={{ maxWidth: 240, maxHeight: 240, borderRadius: 6, objectFit: "contain", display: "block", border: "1px solid color-mix(in srgb, var(--accent) 18%, transparent)" }}
                   />
                 );
               })}
@@ -474,7 +475,14 @@ function AssistantMessageView({
 
   return (
     <div
-      style={{ marginBottom: 16 }}
+      style={{
+        marginBottom: 16,
+        background: "var(--assistant-bg)",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius-card)",
+        boxShadow: "var(--shadow-card)",
+        padding: "10px 14px",
+      }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >

@@ -43,7 +43,7 @@ function getMessagePreview(msg: AgentMessage | Partial<AgentMessage>): string {
 
 function getNodeColor(msg: AgentMessage | Partial<AgentMessage>): { bg: string; border: string } {
   if (msg.role === "user") {
-    return { bg: "rgba(37,99,235,0.18)", border: "rgba(37,99,235,0.7)" };
+    return { bg: "rgba(176,62,34,0.18)", border: "rgba(176,62,34,0.7)" };
   }
   return { bg: "rgba(107,114,128,0.12)", border: "rgba(107,114,128,0.5)" };
 }
