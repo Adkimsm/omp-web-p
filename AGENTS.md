@@ -102,6 +102,7 @@ components/
   ChatWindow.tsx      chat composition + completion sound wrapper
   ChatInput.tsx       input bar + model/thinking/tools/compact controls
   MessageView.tsx     renders one message (user/assistant/toolCall/toolResult)
+  CommandPalette.tsx  ⌘K/Ctrl+K palette (cmdk): session switch, new session, theme
   BranchNavigator.tsx in-session branch switcher
   ChatMinimap.tsx     scroll minimap alongside the message list
   MarkdownBody.tsx    markdown renderer
@@ -111,6 +112,7 @@ components/
   FileExplorer.tsx    file tree inside sidebar
   FileViewer.tsx      file content in a tab
   TabBar.tsx          tab bar (Chat + open file tabs)
+  ui/                 shared primitives: Dialog/Tooltip/Collapsible, fields, toast
 
 hooks/
   useAgentSession.ts  messages + streaming + SSE + fork/navigate/reconciliation logic
@@ -202,11 +204,25 @@ Location: `~/.omp/agent/sessions/<encoded-cwd>/<timestamp>_<uuid>.jsonl`
 
 ---
 
-## CSS Variables (`app/globals.css`)
+## Design Tokens & UI Kit (`app/globals.css`, `components/ui/`)
+
+Warm-paper (light) / warm-ember (dark) palettes; every text/background pair is
+WCAG AA-verified (measured ratios noted in `globals.css` comments). Components
+must consume these variables — no hardcoded colors.
 
 ```
---bg --bg-panel --bg-hover --bg-selected --border
---text --text-muted --text-dim
---accent --user-bg --tool-bg
---font-mono
+color:  --bg --bg-panel --bg-hover --bg-selected --border --bg-subtle
+        --text --text-muted --text-dim
+        --accent --accent-strong --accent-hover   (links / filled buttons / hover)
+        --user-bg --assistant-bg --tool-bg
+type:   --font-serif (display headings, class .display-serif)  --font-mono
+shape:  --radius-control (8) --radius-card (12) --radius-modal (16)
+depth:  --shadow-card --shadow-pop --shadow-modal
+motion: --dur-fast (150ms) --dur-med (220ms) --dur-slow (320ms) --ease-out-warm
 ```
+
+`components/ui/` holds the shared primitives (built on `@base-ui/react`):
+`primitives.tsx` (Dialog/Tooltip/Collapsible), `field.tsx` (form fields +
+ConfirmDialog), `toast.tsx` (`toast.success/error/info`, mounted in AppShell).
+Icons come from `lucide-react` — do not add new inline SVGs. The command
+palette (`components/CommandPalette.tsx`, ⌘K/Ctrl+K) is built on `cmdk`.

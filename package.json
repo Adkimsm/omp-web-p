@@ -2,13 +2,13 @@
   "name": "omp-web",
   "version": "0.1.0",
   "description": "Web UI for the oh-my-pi (omp) coding agent",
-  "homepage": "https://github.com/omp-web/omp-web#readme",
+  "homepage": "https://github.com/Po1nt9/omp-web#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/omp-web/omp-web.git"
+    "url": "git+https://github.com/Po1nt9/omp-web.git"
   },
   "bugs": {
-    "url": "https://github.com/omp-web/omp-web/issues"
+    "url": "https://github.com/Po1nt9/omp-web/issues"
   },
   "license": "MIT",
   "engines": {

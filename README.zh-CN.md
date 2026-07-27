@@ -4,6 +4,17 @@
 
 [oh-my-pi (omp) 编程智能体](https://github.com/can1357/oh-my-pi)的本地 Web UI。omp-web 读取本机的 omp 会话文件，在浏览器中提供一个工作区，支持会话浏览、实时对话、模型配置、技能管理和项目文件预览。
 
+![omp web — 浅色主题](docs/screenshot-light.png)
+
+<details>
+<summary>深色主题与命令面板</summary>
+
+![omp web — 深色主题](docs/screenshot-dark.png)
+
+![omp web — 命令面板](docs/screenshot-palette.png)
+
+</details>
+
 ## 环境要求
 
 - 已安装 [omp](https://github.com/can1357/oh-my-pi) 且在 `PATH` 中（或通过 `OMP_WEB_OMP_BIN` 指向其二进制文件）
@@ -49,6 +60,8 @@ omp-web 没有应用层身份验证，并且可以调用高权限的智能体。
 - **边看项目边聊天**：左侧浏览文件，右侧预览源码、文档、图片、音频和 PDF，同时智能体继续工作。
 - **清晰掌握会话状态**：上下文用量、费用、压缩上下文状态和系统提示词详情都显示在顶栏。
 - **减少对终端配置的依赖**：在 Web UI 中管理模型、登录/API 密钥、模型测试、技能和插件。
+- **⌘K 随处跳转**：命令面板（⌘K / Ctrl+K）支持切换会话、新建会话和切换主题。
+- **温暖的纸感设计**：浅色/深色双主题，衬线展示字体，对比度经 WCAG AA 验证，基于令牌驱动的 UI 套件（Base UI 基元、cmdk、lucide 图标）构建。
 
 ## 配置
 

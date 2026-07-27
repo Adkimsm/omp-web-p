@@ -1,6 +1,19 @@
 # omp web
 
+[English](./README.md) | [简体中文](./README.zh-CN.md) | [日本語](./README.ja.md)
+
 Local web UI for the [oh-my-pi (omp) coding agent](https://github.com/can1357/oh-my-pi). omp-web reads your local omp session files and gives you a browser workspace for session browsing, real-time chat, model configuration, skill management, and project file preview.
+
+![omp web — light theme](docs/screenshot-light.png)
+
+<details>
+<summary>Dark theme &amp; command palette</summary>
+
+![omp web — dark theme](docs/screenshot-dark.png)
+
+![omp web — command palette](docs/screenshot-palette.png)
+
+</details>
 
 ## Requirements
 
@@ -47,6 +60,8 @@ omp-web has no application-level authentication and can invoke a high-privilege 
 - **Chat beside the project**: browse files on the left and preview source, docs, images, audio, and PDFs on the right while the agent works.
 - **See session state clearly**: context usage, cost, compaction state, and system prompt details are visible from the top bar.
 - **Configure less from the terminal**: manage models, login/API keys, model tests, skills, and plugins from the web UI.
+- **Jump anywhere with ⌘K**: a command palette (⌘K / Ctrl+K) for switching sessions, starting new ones, and toggling the theme.
+- **Warm, paper-like design**: light and dark themes with serif display type and WCAG AA-verified contrast, built on a token-driven UI kit (Base UI primitives, cmdk, lucide icons).
 
 ## Configuration
 
