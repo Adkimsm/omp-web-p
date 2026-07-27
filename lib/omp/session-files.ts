@@ -964,9 +964,56 @@ function scanSessionInfoCached(filePath: string): OmpSessionInfo | undefined {
  * `<sessionsDir>/<projectDir>/*.jsonl` files are scanned — per-session
  * artifacts directories (session file name minus .jsonl) are skipped because
  * the walk only descends one level and only accepts regular files.
+ *
+ * The directory walk itself is cached on the sessions root's mtimeMs: creating
+ * or deleting any session changes that parent directory's mtime, so the cache
+ * invalidates for free on every add/remove while turning repeated listing
+ * requests (sidebar poll, page loads) into a single stat. Per-file scanning is
+ * still memoized by scanSessionInfoCached on (size, mtimeMs).
  */
 export async function listAllSessionInfos(): Promise<OmpSessionInfo[]> {
   const sessionsRoot = getSessionsDir();
+  const files = await listSessionFiles(sessionsRoot);
+
+  const sessions: OmpSessionInfo[] = [];
+  for (const file of files) {
+    const info = scanSessionInfoCached(file);
+    if (info) sessions.push(info);
+  }
+  sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
+  return sessions;
+}
+
+interface SessionFileListCacheEntry {
+  mtimeMs: number;
+  files: string[];
+}
+
+declare global {
+  var __ompSessionFileListCache: Map<string, SessionFileListCacheEntry> | undefined;
+}
+
+/** Cached walk of `<sessionsRoot>/<project>/*.jsonl`, keyed on the root's
+ * mtimeMs. Adding/removing a session bumps the root's mtime, invalidating
+ * automatically. */
+async function listSessionFiles(sessionsRoot: string): Promise<string[]> {
+  let rootStat: { mtimeMs: number };
+  try {
+    rootStat = statSync(sessionsRoot);
+  } catch {
+    return [];
+  }
+  if (!globalThis.__ompSessionFileListCache) globalThis.__ompSessionFileListCache = new Map();
+  const cache = globalThis.__ompSessionFileListCache;
+  const cached = cache.get(sessionsRoot);
+  if (cached && cached.mtimeMs === rootStat.mtimeMs) return cached.files;
+
+  const files = collectSessionFiles(sessionsRoot);
+  cache.set(sessionsRoot, { mtimeMs: rootStat.mtimeMs, files });
+  return files;
+}
+
+function collectSessionFiles(sessionsRoot: string): string[] {
   const files: string[] = [];
   try {
     for (const dirent of readdirSync(sessionsRoot, { withFileTypes: true })) {
@@ -987,14 +1034,7 @@ export async function listAllSessionInfos(): Promise<OmpSessionInfo[]> {
   } catch {
     return [];
   }
-
-  const sessions: OmpSessionInfo[] = [];
-  for (const file of files) {
-    const info = scanSessionInfoCached(file);
-    if (info) sessions.push(info);
-  }
-  sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
-  return sessions;
+  return files;
 }
 
 // ============================================================================
@@ -1042,7 +1082,18 @@ export function setSessionTitle(filePath: string, title: string, source: Session
     return true;
   }
 
-  // Legacy file without a slot: full rewrite through a temp file.
+  // Legacy file without a slot: full rewrite through a temp file. Refuse to
+  // materialize a file larger than the load ceiling — renaming a session
+  // should never risk OOMing the server, and legacy slot-less files are rare.
+  let legacySize: number;
+  try {
+    legacySize = statSync(filePath).size;
+  } catch {
+    return false;
+  }
+  if (legacySize > MAX_SESSION_LOAD_BYTES) {
+    return false;
+  }
   const content = readFileSync(filePath, "utf8");
   const lines = content.split("\n");
   const headerIndex = lines.findIndex((line) => line.trim().length > 0);

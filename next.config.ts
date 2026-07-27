@@ -7,8 +7,24 @@ const { version } = JSON.parse(readFileSync(join(__dirname, "package.json"), "ut
 const nextConfig: NextConfig = {
   serverExternalPackages: ["undici"],
   allowedDevOrigins: ['192.168.*.*'],
+  // Security: stop advertising the runtime, and surface dev-mode problems
+  // earlier. Source maps in the browser bundle leak server path layout and
+  // bloat downloads without helping end users of a published app.
+  poweredByHeader: false,
+  reactStrictMode: true,
+  productionBrowserSourceMaps: false,
+  // Next.js enables gzip/brotli compression for `next start` by default; no
+  // custom compression middleware is needed (and would require a custom server).
   async headers() {
     return [
+      {
+        // Hashed build output never changes, so browsers/proxies may cache it
+        // immutably for a year and skip revalidation entirely.
+        source: "/_next/static/:path*",
+        headers: [
+          { key: "Cache-Control", value: "public, max-age=31536000, immutable" },
+        ],
+      },
       {
         source: "/",
         headers: [

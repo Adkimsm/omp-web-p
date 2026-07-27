@@ -79,6 +79,12 @@ export function useTheme() {
       .catch(() => {
         // transition cancelled — ignore
       });
+    // If the transition is skipped/interrupted after starting, browsers may
+    // reject transition.finished; swallow it so it never surfaces as an
+    // unhandled rejection. Does not affect the visual result.
+    if (transition.finished && typeof transition.finished.catch === "function") {
+      transition.finished.catch(() => {});
+    }
   }, []);
 
   return { theme, toggleTheme, isDark: theme === "dark" };

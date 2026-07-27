@@ -81,6 +81,10 @@ export class RpcProcess {
       cwd: options.cwd,
       env: { ...process.env, ...options.env },
       stdio: ["pipe", "pipe", "pipe"],
+      // omp launches grandchildren (LSP servers, extension subprocesses). Run the
+      // child in its own process group so dispose() can SIGTERM/SIGKILL the whole
+      // tree — otherwise a crashed omp would orphan its LSP children as zombies.
+      detached: true,
     });
 
     let resolveReady: (frame: RpcFrame) => void;
@@ -160,6 +164,7 @@ export class RpcProcess {
   waitReady(timeoutMs = 60_000): Promise<RpcFrame> {
     const timeout = new Promise<never>((_, reject) => {
       const timer = setTimeout(() => reject(new Error(`omp RPC ready timeout after ${timeoutMs}ms`)), timeoutMs);
+      timer.unref?.();
       this.readyPromise.finally(() => clearTimeout(timer)).catch(() => {});
     });
     return Promise.race([this.readyPromise, timeout]);
@@ -172,7 +177,10 @@ export class RpcProcess {
 
   /** Send a command and await its response `data`. A failed response rejects
    * with RpcCommandError. No timeout by default — some commands (login,
-   * long prompts via bash) legitimately take minutes. */
+   * long prompts via bash) legitimately take minutes, and the session wrapper
+   * reclaims wedged children via idle-kill and dispose(). Callers that want a
+   * cap pass `timeoutMs` (>0); when set, the timer is unref'd so it never
+   * keeps the event loop alive on its own. */
   sendCommand<T = unknown>(command: { type: string; [key: string]: unknown }, timeoutMs?: number): Promise<T> {
     if (this.exited) {
       return Promise.reject(new Error("omp RPC process has exited"));
@@ -184,11 +192,19 @@ export class RpcProcess {
         resolve: resolve as (data: unknown) => void,
         reject,
       };
-      if (timeoutMs) {
+      if (timeoutMs && timeoutMs > 0) {
         entry.timer = setTimeout(() => {
-          this.pending.delete(id);
-          reject(new Error(`RPC command ${command.type} timed out after ${timeoutMs}ms`));
+          // Only reject if this exact entry is still pending — a reused id or a
+          // response that landed between the timer firing and this callback must
+          // not spuriously reject a different command.
+          if (this.pending.get(id) === entry) {
+            this.pending.delete(id);
+            reject(new Error(`RPC command ${command.type} timed out after ${timeoutMs}ms`));
+          }
         }, timeoutMs);
+        // A pending command timer must never keep the event loop alive on its own
+        // (it would block graceful shutdown when omp has stopped answering).
+        entry.timer.unref?.();
       }
       this.pending.set(id, entry);
       this.child.stdin.write(`${JSON.stringify({ ...command, id })}\n`, (error) => {
@@ -233,7 +249,9 @@ export class RpcProcess {
   }
 
   /** Graceful shutdown: close stdin (omp exits on EOF), escalate to SIGTERM
-   * then SIGKILL. Resolves once the process has exited. */
+   * then SIGKILL on the whole process group. Resolves once the process has
+   * exited. Safe to call during server teardown — escalation timers are
+   * unref'd so they never keep the event loop alive on their own. */
   async dispose(gracePeriodMs = 5_000): Promise<void> {
     if (this.exited) return;
     const exited = new Promise<void>((resolve) => {
@@ -243,12 +261,25 @@ export class RpcProcess {
     try {
       this.child.stdin.end();
     } catch {}
+    // -pid targets the child's whole process group (set up via detached:true),
+    // so grandchildren (LSP, extension subprocesses) die with omp instead of
+    // being orphaned. Falls back to killing just the child if the group is
+    // gone or unsupported.
+    const killGroup = (signal: NodeJS.Signals) => {
+      try {
+        process.kill(-this.child.pid!, signal);
+      } catch {
+        try { this.child.kill(signal); } catch {}
+      }
+    };
     const timer = setTimeout(() => {
-      if (!this.exited) this.child.kill("SIGTERM");
+      if (!this.exited) killGroup("SIGTERM");
     }, gracePeriodMs);
     const killTimer = setTimeout(() => {
-      if (!this.exited) this.child.kill("SIGKILL");
+      if (!this.exited) killGroup("SIGKILL");
     }, gracePeriodMs * 2);
+    timer.unref?.();
+    killTimer.unref?.();
     await exited;
     clearTimeout(timer);
     clearTimeout(killTimer);

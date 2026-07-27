@@ -66,8 +66,34 @@ declare global {
 function getState(): UtilityRpcState {
   if (!globalThis.__ompUtilityRpcState) {
     globalThis.__ompUtilityRpcState = { proc: null, idleTimer: null, queue: Promise.resolve() };
+    // Mirror the session registry in lib/rpc-manager.ts: dispose the shared
+    // utility omp process on server shutdown so it does not outlive the server.
+    // Idempotent and safe to call any time (clears the idle timer + disposes).
+    const cleanup = () => disposeUtilityRpc();
+    process.once("exit", cleanup);
+    process.once("SIGINT", cleanup);
+    process.once("SIGTERM", cleanup);
   }
   return globalThis.__ompUtilityRpcState;
+}
+
+/**
+ * Tear down the shared utility omp process immediately (skip the idle timer).
+ * Registered as a server-shutdown hook in getState() above (mirroring the
+ * session registry in lib/rpc-manager.ts) so the utility process does not
+ * outlive the server; also safe to call any time — it just clears any pending
+ * idle kill and disposes the live child.
+ */
+export function disposeUtilityRpc(): void {
+  const state = globalThis.__ompUtilityRpcState;
+  if (!state) return;
+  if (state.idleTimer) {
+    clearTimeout(state.idleTimer);
+    state.idleTimer = null;
+  }
+  const proc = state.proc;
+  state.proc = null;
+  if (proc) void proc.dispose();
 }
 
 function scheduleIdleKill(state: UtilityRpcState): void {

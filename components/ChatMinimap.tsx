@@ -73,6 +73,10 @@ export function ChatMinimap({ messages, streamingMessage, scrollContainer, messa
   const [mouseYRatio, setMouseYRatio] = useState<number | null>(null);
   const draggingRef = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  // RAF gate for mousemove so a pixel-level pointer event doesn't re-render
+  // the whole minimap (every node + tooltip) on every frame.
+  const mouseMoveRafRef = useRef<number | null>(null);
+  const pendingMouseYRef = useRef<number | null>(null);
 
   const allMessages = useMemo(
     () => (streamingMessage ? [...messages, streamingMessage] : messages) as (AgentMessage | Partial<AgentMessage>)[],
@@ -177,6 +181,16 @@ export function ChatMinimap({ messages, streamingMessage, scrollContainer, messa
     return () => clearTimeout(t);
   }, [messages.length, measureNodes, updateScroll]);
 
+  // Cancel any pending mousemove flush when the component unmounts.
+  useEffect(() => {
+    return () => {
+      if (mouseMoveRafRef.current !== null) {
+        cancelAnimationFrame(mouseMoveRafRef.current);
+        mouseMoveRafRef.current = null;
+      }
+    };
+  }, []);
+
   const scrollToMinimapRatio = useCallback((viewportTopRatio: number) => {
     const el = scrollContainer.current;
     if (!el) return;
@@ -185,6 +199,24 @@ export function ChatMinimap({ messages, streamingMessage, scrollContainer, messa
     const clamped = Math.max(0, Math.min(1 - viewportRatio, viewportTopRatio));
     el.scrollTop = (clamped / (1 - viewportRatio)) * scrollable;
   }, [scrollContainer, viewportRatio]);
+
+  // Coalesce mousemove updates to one per animation frame: writing state on
+  // every pointermove event re-renders all nodes + tooltips dozens of times
+  // per second while the cursor is inside the minimap.
+  const flushMouseMove = useCallback(() => {
+    mouseMoveRafRef.current = null;
+    if (pendingMouseYRef.current !== null) {
+      setMouseYRatio(pendingMouseYRef.current);
+      pendingMouseYRef.current = null;
+    }
+  }, []);
+  const handleMinimapMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    pendingMouseYRef.current = (e.clientY - rect.top) / rect.height;
+    if (mouseMoveRafRef.current === null) {
+      mouseMoveRafRef.current = requestAnimationFrame(flushMouseMove);
+    }
+  }, [flushMouseMove]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     if (!visible) return;
@@ -218,6 +250,11 @@ export function ChatMinimap({ messages, streamingMessage, scrollContainer, messa
   const TOOLTIP_HEIGHT = 22;
   const TOOLTIP_GAP = 2;
   const minimapHeightPx = containerRef.current?.clientHeight ?? 600;
+
+  // Per-node colors and previews are pure functions of each node's message;
+  // memoize so they aren't recomputed on every scroll/mousemove re-render.
+  const nodeColors = useMemo(() => nodes.map((node) => getNodeColor(node.msg)), [nodes]);
+  const nodePreviews = useMemo(() => nodes.map((node) => getMessagePreview(node.msg)), [nodes]);
 
   const tooltipPositions = useMemo(() => {
     if (!minimapHovered || nodes.length === 0) return [];
@@ -261,10 +298,7 @@ export function ChatMinimap({ messages, streamingMessage, scrollContainer, messa
       onMouseDown={handleMouseDown}
       onMouseEnter={() => setMinimapHovered(true)}
       onMouseLeave={() => { setMinimapHovered(false); setMouseYRatio(null); }}
-      onMouseMove={(e) => {
-        const rect = e.currentTarget.getBoundingClientRect();
-        setMouseYRatio((e.clientY - rect.top) / rect.height);
-      }}
+      onMouseMove={handleMinimapMouseMove}
       style={{
         width: MINIMAP_WIDTH,
         flexShrink: 0,
@@ -294,7 +328,7 @@ export function ChatMinimap({ messages, streamingMessage, scrollContainer, messa
 
       {/* Message nodes */}
       {nodes.map((node) => {
-        const color = getNodeColor(node.msg);
+        const color = nodeColors[node.index] ?? getNodeColor(node.msg);
         const isNearest = minimapHovered && nearestIndex === node.index;
         const isUser = node.msg.role === "user";
         const dotTop = node.topRatio * 100;
@@ -352,8 +386,8 @@ export function ChatMinimap({ messages, streamingMessage, scrollContainer, messa
 
       {/* Tooltips for all nodes, collision-free positions */}
       {minimapHovered && nodes.map((node, i) => {
-        const preview = getMessagePreview(node.msg);
-        const color = getNodeColor(node.msg);
+        const preview = nodePreviews[i] ?? getMessagePreview(node.msg);
+        const color = nodeColors[i] ?? getNodeColor(node.msg);
         const isNearest = nearestIndex === node.index;
         if (!preview || tooltipPositions.length === 0) return null;
         return (

@@ -634,5 +634,8 @@
   "skillsConfig.version": "版本",
   "skillsConfig.visibleInPrompt": "已在模型提示词中显示——点击禁用",
   "tabBar.close": "关闭",
-  "tabBar.closeTab": "关闭 {label}"
+  "tabBar.closeTab": "关闭 {label}",
+  "errors.appCrash.title": "出了点问题",
+  "errors.appCrash.description": "渲染界面时发生了意外错误。你可以重试或刷新页面。",
+  "errors.appCrash.retry": "重试"
 }

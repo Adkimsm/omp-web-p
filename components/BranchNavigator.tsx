@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo, useRef, useEffect } from "react";
+import { useState, useCallback, useMemo, memo, useRef, useEffect } from "react";
 import { translate, useI18n } from "@/lib/i18n";
 import type { SessionEntry, SessionTreeNode } from "@/lib/types";
 
@@ -90,15 +90,17 @@ interface TreeNodeProps {
   onSelect: (id: string) => void;
 }
 
-function TreeNodeView({ node, activePathIds, depth, isLast, parentLines, onSelect }: TreeNodeProps) {
+const TreeNodeView = memo(function TreeNodeView({ node, activePathIds, depth, isLast, parentLines, onSelect }: TreeNodeProps) {
   const { t } = useI18n();
-  const { node: rep, skipped } = compress(node);
-  const isActive = activePathIds.has(rep.entry.id);
-  const isOnPath = activePathIds.has(node.entry.id) || activePathIds.has(rep.entry.id);
-  const label = getLabel(rep.entry);
-  const role = rep.entry.type === "message" && "message" in rep.entry
+  const { node: rep, skipped } = useMemo(() => compress(node), [node]);
+  const repId = rep.entry.id;
+  const nodeId = node.entry.id;
+  const isActive = activePathIds.has(repId);
+  const isOnPath = activePathIds.has(nodeId) || activePathIds.has(repId);
+  const label = useMemo(() => getLabel(rep.entry), [rep.entry]);
+  const role = useMemo(() => rep.entry.type === "message" && "message" in rep.entry
     ? (rep.entry.message as { role: string }).role
-    : null;
+    : null, [rep.entry]);
 
   return (
     <div>
@@ -216,7 +218,21 @@ function TreeNodeView({ node, activePathIds, depth, isLast, parentLines, onSelec
       ))}
     </div>
   );
-}
+}, (prev, next) => {
+  // Re-render only when this node, its compressed representative, or its
+  // active-path membership changed. parentLines/depth/isLast are positional
+  // and stable for a given node so they're intentionally ignored.
+  if (prev.node !== next.node) return false;
+  if (prev.onSelect !== next.onSelect) return false;
+  if (prev.activePathIds === next.activePathIds) return true;
+  // node is unchanged here, so the compressed representative id is stable —
+  // compute it once and check membership against both Set identities.
+  const id = next.node.entry.id;
+  const repId = compress(next.node).node.entry.id;
+  if (prev.activePathIds.has(repId) !== next.activePathIds.has(repId)) return false;
+  if (prev.activePathIds.has(id) !== next.activePathIds.has(id)) return false;
+  return true;
+});
 
 export function BranchNavigator({ tree, activeLeafId, onLeafChange, inline, containerRef, open: openProp, onToggle, hasSession, compact }: Props) {
   const { t } = useI18n();
@@ -248,16 +264,18 @@ export function BranchNavigator({ tree, activeLeafId, onLeafChange, inline, cont
     onLeafChange(id);
   }, [onLeafChange]);
 
-  const noBranchReason = !hasSession
+  const noBranchReason = useMemo(() => !hasSession
     ? t("branchNavigator.noActiveSession")
     : !hasBranch(tree)
       ? t("branchNavigator.noBranches")
-      : null;
+      : null, [hasSession, tree, t]);
 
   // Find first meaningful node (skip pure linear prefix)
-  const compressed = tree.length > 0 ? compress(tree[0]) : null;
-  const firstNode = compressed?.node ?? null;
-  const hasContent = !noBranchReason && firstNode && firstNode.children.length > 1;
+  const firstNode = useMemo(() => {
+    const compressed = tree.length > 0 ? compress(tree[0]) : null;
+    return compressed?.node ?? null;
+  }, [tree]);
+  const hasContent = !noBranchReason && firstNode !== null && firstNode.children.length > 1;
 
   const branchIcon = (
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: hasContent ? "var(--accent)" : "var(--text-dim)", flexShrink: 0 }}>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useState, useCallback, useRef, type CSSProperties, type ReactNode } from "react";
+import { memo, useEffect, useLayoutEffect, useState, useCallback, useRef, useMemo, type CSSProperties, type ReactNode } from "react";
 import type { SessionInfo } from "@/lib/types";
 import { translate, useI18n } from "@/lib/i18n";
 import { formatApiError } from "@/lib/i18n/api-error";
@@ -717,17 +717,30 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
     onNewSession?.(tempId, selectedCwd);
   }, [selectedCwd, onNewSession]);
 
-  const recentProjects = getRecentProjects(allSessions);
+  const recentProjects = useMemo(() => getRecentProjects(allSessions), [allSessions]);
   const showProjectFilter = recentProjects.length > 8;
-  const visibleProjects = projectFilter.trim()
-    ? recentProjects.filter((p) => p.toLowerCase().includes(projectFilter.trim().toLowerCase()))
-    : recentProjects;
+  // Debounce the project filter so each keystroke doesn't recompute the
+  // filtered list (especially relevant when many projects are loaded).
+  const debouncedProjectFilterRef = useRef("");
+  const [debouncedProjectFilter, setDebouncedProjectFilter] = useState("");
+  useEffect(() => {
+    const id = setTimeout(() => {
+      debouncedProjectFilterRef.current = projectFilter;
+      setDebouncedProjectFilter(projectFilter);
+    }, 120);
+    return () => clearTimeout(id);
+  }, [projectFilter]);
+  const visibleProjects = useMemo(() => {
+    const q = debouncedProjectFilter.trim().toLowerCase();
+    if (!q) return recentProjects;
+    return recentProjects.filter((p) => p.toLowerCase().includes(q));
+  }, [recentProjects, debouncedProjectFilter]);
 
   // Sessions of every worktree in the selected project are shown together
-  const selectedProject = projectRootFor(selectedCwd);
-  const filteredSessions = selectedProject
+  const selectedProject = useMemo(() => projectRootFor(selectedCwd), [projectRootFor, selectedCwd]);
+  const filteredSessions = useMemo(() => selectedProject
     ? allSessions.filter((s) => (s.projectRoot ?? s.cwd) === selectedProject)
-    : allSessions;
+    : allSessions, [allSessions, selectedProject]);
   const showWorktreeSwitcher = Boolean(
     worktreeState?.isGit
     && worktreeState.isTopLevel
@@ -758,7 +771,14 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
       : null);
 
   // Build parent-child tree within the filtered set
-  const sessionTree = buildSessionTree(filteredSessions);
+  const sessionTree = useMemo(() => buildSessionTree(filteredSessions), [filteredSessions]);
+
+  // Stable callbacks for the session list so memoized children don't re-render
+  // on every parent state change.
+  const handleSessionDeleted = useCallback((id: string) => {
+    onSessionDeleted?.(id);
+    loadSessions();
+  }, [onSessionDeleted, loadSessions]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
@@ -1399,10 +1419,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
             unreadSessionIds={unreadSessionIds}
             onSelectSession={handleSelectSessionFromList}
             onRenamed={loadSessions}
-            onSessionDeleted={(id) => {
-              onSessionDeleted?.(id);
-              loadSessions();
-            }}
+            onSessionDeleted={handleSessionDeleted}
             depth={0}
           />
         ))}
@@ -1531,7 +1548,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   );
 }
 
-function SessionTreeItem({
+const SessionTreeItem = memo(function SessionTreeItem({
   node,
   selectedSessionId,
   runningSessionIds,
@@ -1552,6 +1569,25 @@ function SessionTreeItem({
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const hasChildren = node.children.length > 0;
+  const sessionId = node.session.id;
+
+  // Pre-compute the booleans so SessionItem only sees primitives — its memo
+  // check then never re-renders unless this row's flags actually changed.
+  const isSelected = sessionId === selectedSessionId;
+  const isRunning = runningSessionIds.has(sessionId);
+  const isUnread = unreadSessionIds.has(sessionId);
+
+  // Stable callbacks: depend only on primitives / stable parent callbacks so
+  // SessionItem's React.memo stays effective across re-renders.
+  const handleClick = useCallback(() => {
+    onSelectSession(node.session);
+  }, [onSelectSession, node.session]);
+  const handleDeleted = useCallback((id: string) => {
+    onSessionDeleted?.(id);
+  }, [onSessionDeleted]);
+  const handleToggleCollapse = useCallback(() => {
+    setCollapsed((v) => !v);
+  }, []);
 
   return (
     <div>
@@ -1569,16 +1605,16 @@ function SessionTreeItem({
         )}
         <SessionItem
           session={node.session}
-          isSelected={node.session.id === selectedSessionId}
-          isRunning={runningSessionIds.has(node.session.id)}
-          isUnread={unreadSessionIds.has(node.session.id)}
-          onClick={() => onSelectSession(node.session)}
+          isSelected={isSelected}
+          isRunning={isRunning}
+          isUnread={isUnread}
+          onClick={handleClick}
           onRenamed={onRenamed}
-          onDeleted={(id) => onSessionDeleted?.(id)}
+          onDeleted={handleDeleted}
           depth={depth}
           hasChildren={hasChildren}
           collapsed={collapsed}
-          onToggleCollapse={() => setCollapsed((v) => !v)}
+          onToggleCollapse={handleToggleCollapse}
         />
       </div>
       {hasChildren && !collapsed && (
@@ -1600,7 +1636,27 @@ function SessionTreeItem({
       )}
     </div>
   );
-}
+}, (prev, next) => {
+  // Deep-changed inputs warrant a re-render; otherwise skip.
+  if (prev.node !== next.node) return false;
+  if (prev.selectedSessionId !== next.selectedSessionId) {
+    // Only re-render if THIS node's selection state flipped.
+    const id = prev.node.session.id;
+    if ((id === prev.selectedSessionId) !== (id === next.selectedSessionId)) return false;
+  }
+  if (prev.runningSessionIds !== next.runningSessionIds) {
+    const id = prev.node.session.id;
+    if (prev.runningSessionIds.has(id) !== next.runningSessionIds.has(id)) return false;
+  }
+  if (prev.unreadSessionIds !== next.unreadSessionIds) {
+    const id = prev.node.session.id;
+    if (prev.unreadSessionIds.has(id) !== next.unreadSessionIds.has(id)) return false;
+  }
+  if (prev.onSelectSession !== next.onSelectSession
+    || prev.onRenamed !== next.onRenamed
+    || prev.onSessionDeleted !== next.onSessionDeleted) return false;
+  return true;
+});
 
 function RunningSessionIndicator() {
   const { t } = useI18n();
@@ -1667,7 +1723,7 @@ function UnreadSessionIndicator() {
   );
 }
 
-function SessionItem({
+const SessionItem = memo(function SessionItem({
   session,
   isSelected,
   isRunning,
@@ -2014,4 +2070,4 @@ function SessionItem({
       )}
     </div>
   );
-}
+});
