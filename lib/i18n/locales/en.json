@@ -637,5 +637,16 @@
   "tabBar.closeTab": "Close {label}",
   "errors.appCrash.title": "Something went wrong",
   "errors.appCrash.description": "An unexpected error occurred while rendering the interface. You can try again or reload the page.",
-  "errors.appCrash.retry": "Try again"
+  "errors.appCrash.retry": "Try again",
+  "commandPalette.label": "Command palette",
+  "commandPalette.placeholder": "Search commands…",
+  "commandPalette.empty": "No results",
+  "commandPalette.sessions": "Sessions",
+  "commandPalette.actions": "Actions",
+  "commandPalette.models": "Models",
+  "commandPalette.newSession": "New session",
+  "commandPalette.toggleTheme": "Toggle theme",
+  "commandPalette.currentModel": "Current model",
+  "commandPalette.notAvailable": "Managed by chat",
+  "commandPalette.hints": "↑↓ Navigate · ↵ Select · esc Close"
 }

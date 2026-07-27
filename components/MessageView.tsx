@@ -1,12 +1,14 @@
 "use client";
 
 import { memo, useState, useRef, useEffect, useMemo } from "react";
+import { Copy, Check, GitFork, CornerUpLeft, ChevronRight, Brain } from "lucide-react";
 import { MarkdownBody } from "./MarkdownBody";
 import { copyText } from "@/lib/clipboard";
 import { translate, useI18n, type Locale } from "@/lib/i18n";
 import { parseCompactionSummary } from "@/lib/compaction-summary";
 import { isEmptyThinkingBlock } from "@/lib/message-display";
 import { parseUnifiedPatch, type SplitDiffCell } from "@/lib/patch";
+import { Tooltip, Collapsible, CollapsibleTrigger, CollapsiblePanel } from "./ui/primitives";
 import type {
   AgentMessage,
   UserMessage,
@@ -240,35 +242,28 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
             pointerEvents: hovered ? "auto" : "none",
             transition: "opacity 0.12s",
           }}>
-            <button
-              onClick={copyContent}
-              title={t("messageView.copyMessage")}
-              style={{
-                display: "flex", alignItems: "center", gap: 4,
-                padding: "3px 8px", height: 22,
-                background: "none", border: "none",
-                borderRadius: 5,
-                color: copied ? "var(--accent)" : "var(--text-dim)",
-                cursor: "pointer",
-                fontSize: 11, fontWeight: 400,
-                whiteSpace: "nowrap",
-                transition: "color 0.12s",
-              }}
-              onMouseEnter={(e) => { if (!copied) e.currentTarget.style.color = "var(--accent)"; }}
-              onMouseLeave={(e) => { if (!copied) e.currentTarget.style.color = "var(--text-dim)"; }}
-            >
-              {copied ? (
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
-              ) : (
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                </svg>
-              )}
-              {copied ? t("messageView.copied") : t("messageView.copy")}
-            </button>
+            <Tooltip content={t("messageView.copyMessage")}>
+              <button
+                onClick={copyContent}
+                aria-label={t("messageView.copyMessage")}
+                style={{
+                  display: "flex", alignItems: "center", gap: 4,
+                  padding: "3px 8px", height: 22,
+                  background: "none", border: "none",
+                  borderRadius: 5,
+                  color: copied ? "var(--accent)" : "var(--text-dim)",
+                  cursor: "pointer",
+                  fontSize: 11, fontWeight: 400,
+                  whiteSpace: "nowrap",
+                  transition: "color 0.12s",
+                }}
+                onMouseEnter={(e) => { if (!copied) e.currentTarget.style.color = "var(--accent)"; }}
+                onMouseLeave={(e) => { if (!copied) e.currentTarget.style.color = "var(--text-dim)"; }}
+              >
+                {copied ? <Check size={11} strokeWidth={1.8} /> : <Copy size={11} strokeWidth={1.8} />}
+                {copied ? t("messageView.copied") : t("messageView.copy")}
+              </button>
+            </Tooltip>
           </div>
           {(canFork || canNavigate) && (
             <div style={{
@@ -278,57 +273,53 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
               transition: "opacity 0.12s",
             }}>
               {canNavigate && (
-                <button
-                  onClick={() => { onNavigate!(prevAssistantEntryId!); onEditContent?.(content); }}
-                  title={t("messageView.editFromHereTitle")}
-                  style={{
-                    display: "flex", alignItems: "center", gap: 4,
-                    padding: "3px 8px", height: 22,
-                    background: "none", border: "none",
-                    borderRadius: 5,
-                    color: "var(--text-dim)",
-                    cursor: "pointer",
-                    fontSize: 11, fontWeight: 400,
-                    whiteSpace: "nowrap",
-                    transition: "color 0.12s",
-                  }}
-                  onMouseEnter={(e) => { e.currentTarget.style.color = "var(--accent)"; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-dim)"; }}
-                >
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="15 10 20 15 15 20" />
-                    <path d="M4 4v7a4 4 0 0 0 4 4h12" />
-                  </svg>
-                  {t("messageView.editFromHere")}
-                </button>
+                <Tooltip content={t("messageView.editFromHereTitle")}>
+                  <button
+                    onClick={() => { onNavigate!(prevAssistantEntryId!); onEditContent?.(content); }}
+                    aria-label={t("messageView.editFromHereTitle")}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 4,
+                      padding: "3px 8px", height: 22,
+                      background: "none", border: "none",
+                      borderRadius: 5,
+                      color: "var(--text-dim)",
+                      cursor: "pointer",
+                      fontSize: 11, fontWeight: 400,
+                      whiteSpace: "nowrap",
+                      transition: "color 0.12s",
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.color = "var(--accent)"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-dim)"; }}
+                  >
+                    <CornerUpLeft size={11} strokeWidth={1.8} />
+                    {t("messageView.editFromHere")}
+                  </button>
+                </Tooltip>
               )}
               {canFork && (
-                <button
-                  onClick={() => { onFork!(entryId!); }}
-                  disabled={forking}
-                  title={forking ? t("messageView.creatingSession") : t("messageView.newSessionTitle")}
-                  style={{
-                    display: "flex", alignItems: "center", gap: 4,
-                    padding: "3px 8px", height: 22,
-                    background: "none", border: "none",
-                    borderRadius: 5,
-                    color: forking ? "var(--accent)" : "var(--text-dim)",
-                    cursor: forking ? "not-allowed" : "pointer",
-                    fontSize: 11, fontWeight: 400,
-                    whiteSpace: "nowrap",
-                    transition: "color 0.12s",
-                  }}
-                  onMouseEnter={(e) => { if (!forking) e.currentTarget.style.color = "var(--accent)"; }}
-                  onMouseLeave={(e) => { if (!forking) e.currentTarget.style.color = "var(--text-dim)"; }}
-                >
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <line x1="6" y1="3" x2="6" y2="15" />
-                    <circle cx="18" cy="6" r="3" />
-                    <circle cx="6" cy="18" r="3" />
-                    <path d="M18 9a9 9 0 0 1-9 9" />
-                  </svg>
-                  {forking ? t("messageView.creating") : t("messageView.newSession")}
-                </button>
+                <Tooltip content={forking ? t("messageView.creatingSession") : t("messageView.newSessionTitle")}>
+                  <button
+                    onClick={() => { onFork!(entryId!); }}
+                    disabled={forking}
+                    aria-label={forking ? t("messageView.creatingSession") : t("messageView.newSessionTitle")}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 4,
+                      padding: "3px 8px", height: 22,
+                      background: "none", border: "none",
+                      borderRadius: 5,
+                      color: forking ? "var(--accent)" : "var(--text-dim)",
+                      cursor: forking ? "not-allowed" : "pointer",
+                      fontSize: 11, fontWeight: 400,
+                      whiteSpace: "nowrap",
+                      transition: "color 0.12s",
+                    }}
+                    onMouseEnter={(e) => { if (!forking) e.currentTarget.style.color = "var(--accent)"; }}
+                    onMouseLeave={(e) => { if (!forking) e.currentTarget.style.color = "var(--text-dim)"; }}
+                  >
+                    <GitFork size={11} strokeWidth={1.8} />
+                    {forking ? t("messageView.creating") : t("messageView.newSession")}
+                  </button>
+                </Tooltip>
               )}
             </div>
           )}
@@ -549,37 +540,30 @@ function AssistantMessageView({
           </div>
         )}
         {textContent && !isStreaming && (
-          <button
-            onClick={copyContent}
-            title={t("messageView.copyMessage")}
-            style={{
-              display: "flex", alignItems: "center", gap: 4,
-              padding: "3px 8px", height: 22,
-              background: "none", border: "none",
-              borderRadius: 5,
-              color: copied ? "var(--accent)" : "var(--text-dim)",
-              cursor: "pointer",
-              fontSize: 11, fontWeight: 400,
-              whiteSpace: "nowrap",
-              opacity: hovered ? 1 : 0,
-              pointerEvents: hovered ? "auto" : "none",
-              transition: "opacity 0.12s, color 0.12s",
-            }}
-            onMouseEnter={(e) => { if (!copied) e.currentTarget.style.color = "var(--accent)"; }}
-            onMouseLeave={(e) => { if (!copied) e.currentTarget.style.color = "var(--text-dim)"; }}
-          >
-            {copied ? (
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="20 6 9 17 4 12" />
-              </svg>
-            ) : (
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-              </svg>
-            )}
-            {copied ? t("messageView.copied") : t("messageView.copy")}
-          </button>
+          <Tooltip content={t("messageView.copyMessage")}>
+            <button
+              onClick={copyContent}
+              aria-label={t("messageView.copyMessage")}
+              style={{
+                display: "flex", alignItems: "center", gap: 4,
+                padding: "3px 8px", height: 22,
+                background: "none", border: "none",
+                borderRadius: 5,
+                color: copied ? "var(--accent)" : "var(--text-dim)",
+                cursor: "pointer",
+                fontSize: 11, fontWeight: 400,
+                whiteSpace: "nowrap",
+                opacity: hovered ? 1 : 0,
+                pointerEvents: hovered ? "auto" : "none",
+                transition: "opacity 0.12s, color 0.12s",
+              }}
+              onMouseEnter={(e) => { if (!copied) e.currentTarget.style.color = "var(--accent)"; }}
+              onMouseLeave={(e) => { if (!copied) e.currentTarget.style.color = "var(--text-dim)"; }}
+            >
+              {copied ? <Check size={11} strokeWidth={1.8} /> : <Copy size={11} strokeWidth={1.8} />}
+              {copied ? t("messageView.copied") : t("messageView.copy")}
+            </button>
+          </Tooltip>
         )}
         {time && !isStreaming && (
           <span style={{ fontSize: 10, color: "var(--text-dim)", marginLeft: "auto" }}>{time}</span>
@@ -632,10 +616,9 @@ const ThinkingBlock = memo(function ThinkingBlock({ block, duration, sessionId, 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const toggle = async () => {
-    const nextExpanded = !expanded;
-    setExpanded(nextExpanded);
-    if (!nextExpanded || !block.deferred || content !== null) return;
+  const handleOpenChange = (nextOpen: boolean) => {
+    setExpanded(nextOpen);
+    if (!nextOpen || !block.deferred || content !== null) return;
     if (!sessionId || !entryId) {
       setError(t("messageView.thinkingUnavailable"));
       return;
@@ -643,13 +626,10 @@ const ThinkingBlock = memo(function ThinkingBlock({ block, duration, sessionId, 
 
     setLoading(true);
     setError(null);
-    try {
-      setContent(await loadThinkingContent(sessionId, entryId, blockIndex));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
+    void loadThinkingContent(sessionId, entryId, blockIndex)
+      .then((text) => setContent(text))
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)))
+      .finally(() => setLoading(false));
   };
 
   return (
@@ -661,29 +641,43 @@ const ThinkingBlock = memo(function ThinkingBlock({ block, duration, sessionId, 
         fontSize: 13,
       }}
     >
-      <button
-        onClick={() => void toggle()}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-          width: "100%",
-          padding: "6px 10px",
-          background: "var(--bg-panel)",
-          border: "none",
-          color: "var(--text-muted)",
-          cursor: "pointer",
-          fontSize: 12,
-          textAlign: "left",
-        }}
+      <Collapsible
+        open={expanded}
+        onOpenChange={handleOpenChange}
       >
-        <span>{t("messageView.thinking")}</span>
-        {duration !== undefined && (
-          <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--text-dim)", fontVariantNumeric: "tabular-nums" }}>{t("messageView.durationSeconds", { seconds: duration })}</span>
-        )}
-      </button>
-      {expanded && (
-        <div
+        <CollapsibleTrigger
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            width: "100%",
+            padding: "6px 10px",
+            background: "var(--bg-panel)",
+            border: "none",
+            color: "var(--text-muted)",
+            cursor: "pointer",
+            fontSize: 12,
+            fontWeight: 400,
+            textAlign: "left",
+          }}
+        >
+          <Brain size={11} strokeWidth={1.8} style={{ flexShrink: 0 }} />
+          <span>{t("messageView.thinking")}</span>
+          {duration !== undefined && (
+            <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--text-dim)", fontVariantNumeric: "tabular-nums" }}>{t("messageView.durationSeconds", { seconds: duration })}</span>
+          )}
+          <ChevronRight
+            size={10}
+            strokeWidth={1.6}
+            style={{
+              flexShrink: 0,
+              marginLeft: duration === undefined ? "auto" : 4,
+              transform: expanded ? "rotate(90deg)" : "none",
+              transition: "transform var(--dur-fast) var(--ease-out-warm)",
+            }}
+          />
+        </CollapsibleTrigger>
+        <CollapsiblePanel
           style={{
             padding: "8px 10px",
             color: error ? "#f87171" : "var(--text-muted)",
@@ -695,8 +689,8 @@ const ThinkingBlock = memo(function ThinkingBlock({ block, duration, sessionId, 
           }}
         >
           {loading ? t("messageView.loadingThinking") : error ?? (block.deferred ? content : block.thinking)}
-        </div>
-      )}
+        </CollapsiblePanel>
+      </Collapsible>
     </div>
   );
 }, (prev, next) => (
@@ -733,72 +727,83 @@ const ToolCallBlock = memo(function ToolCallBlock({ block, result, duration }: {
         background: isError ? "rgba(248,113,113,0.05)" : "rgba(34,197,94,0.04)",
       }}
     >
-      {/* ── Tool call header ── */}
-      <button
-        onClick={() => setExpanded((v) => !v)}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 7,
-          width: "100%",
-          padding: "6px 10px",
-          background: "none",
-          border: "none",
-          color: "var(--text-muted)",
-          cursor: "pointer",
-          fontSize: 12,
-          textAlign: "left",
-          minWidth: 0,
-        }}
+      <Collapsible
+        open={expanded}
+        onOpenChange={setExpanded}
       >
-        <span style={{ color: isError ? "#f87171" : "#16a34a", fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: 11, flexShrink: 0 }}>
-          {block.toolName}
-        </span>
-        <span style={{ color: "var(--text-dim)", fontFamily: "var(--font-mono)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>
-          {getToolPreview(block)}
-        </span>
-        {duration !== undefined && (
-          <span style={{ fontSize: 11, color: "var(--text-dim)", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{t("messageView.durationSeconds", { seconds: duration })}</span>
-        )}
-        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="var(--text-dim)" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}>
-          <polyline points="2 3.5 5 6.5 8 3.5" />
-        </svg>
-      </button>
-
-      {/* ── Expanded: input args ── */}
-      {expanded && !isEditTool && (
-        <pre
+        {/* ── Tool call header ── */}
+        <CollapsibleTrigger
           style={{
-            margin: 0,
-            padding: "8px 10px",
+            display: "flex",
+            alignItems: "center",
+            gap: 7,
+            width: "100%",
+            padding: "6px 10px",
+            background: "none",
+            border: "none",
             color: "var(--text-muted)",
+            cursor: "pointer",
             fontSize: 12,
-            lineHeight: 1.5,
-            overflow: "auto",
-            background: "var(--bg-subtle)",
-            borderTop: isError ? "1px solid rgba(248,113,113,0.25)" : "1px solid rgba(34,197,94,0.2)",
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-all",
+            fontWeight: 400,
+            textAlign: "left",
+            minWidth: 0,
           }}
         >
-          {inputStr}
-        </pre>
-      )}
+          <span style={{ color: isError ? "#f87171" : "#16a34a", fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: 11, flexShrink: 0 }}>
+            {block.toolName}
+          </span>
+          <span style={{ color: "var(--text-dim)", fontFamily: "var(--font-mono)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>
+            {getToolPreview(block)}
+          </span>
+          {duration !== undefined && (
+            <span style={{ fontSize: 11, color: "var(--text-dim)", flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{t("messageView.durationSeconds", { seconds: duration })}</span>
+          )}
+          <ChevronRight
+            size={10}
+            strokeWidth={1.6}
+            style={{
+              flexShrink: 0,
+              transform: expanded ? "rotate(90deg)" : "none",
+              transition: "transform var(--dur-fast) var(--ease-out-warm)",
+            }}
+          />
+        </CollapsibleTrigger>
 
-      {/* ── Paired result — only shown when expanded ── */}
-      {expanded && result && (
-        resultDiff ? (
-          <PairedDiffResult
-            diff={resultDiff}
-          />
-        ) : (
-          <PairedResult
-            text={resultText ?? ""}
-            isEmpty={resultIsEmpty}
-            isError={isError}
-          />
-        )
-      )}
+        {/* ── Expanded: input args ── */}
+        {!isEditTool && (
+          <pre
+            style={{
+              margin: 0,
+              padding: "8px 10px",
+              color: "var(--text-muted)",
+              fontSize: 12,
+              lineHeight: 1.5,
+              overflow: "auto",
+              background: "var(--bg-subtle)",
+              borderTop: isError ? "1px solid rgba(248,113,113,0.25)" : "1px solid rgba(34,197,94,0.2)",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-all",
+            }}
+          >
+            {inputStr}
+          </pre>
+        )}
+
+        {/* ── Paired result — only shown when expanded ── */}
+        {result && (
+          resultDiff ? (
+            <PairedDiffResult
+              diff={resultDiff}
+            />
+          ) : (
+            <PairedResult
+              text={resultText ?? ""}
+              isEmpty={resultIsEmpty}
+              isError={isError}
+            />
+          )
+        )}
+      </Collapsible>
     </div>
   );
 }, (prev, next) => (

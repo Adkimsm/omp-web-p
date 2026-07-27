@@ -39,6 +39,9 @@ const PluginsConfig = dynamic(() => import("./PluginsConfig").then((m) => m.Plug
   ssr: false,
   loading: () => <ModalLoadingFallback />,
 });
+const CommandPalette = dynamic(() => import("./CommandPalette").then((m) => m.CommandPalette), {
+  ssr: false,
+});
 
 function PanelLoadingFallback() {
   const { t } = useI18n();
@@ -478,6 +481,11 @@ export function AppShell() {
 
   const sidebarContent = (
     <>
+      <CommandPalette
+        onSelectSession={handleSelectSession}
+        onNewSession={() => handleNewSession(`palette-${Date.now()}`, activeCwd ?? "")}
+        currentModel={null}
+      />
       <SessionSidebar
         selectedSessionId={selectedSession?.id ?? null}
         onSelectSession={handleSelectSession}

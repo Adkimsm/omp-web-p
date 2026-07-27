@@ -637,5 +637,16 @@
   "tabBar.closeTab": "关闭 {label}",
   "errors.appCrash.title": "出了点问题",
   "errors.appCrash.description": "渲染界面时发生了意外错误。你可以重试或刷新页面。",
-  "errors.appCrash.retry": "重试"
+  "errors.appCrash.retry": "重试",
+  "commandPalette.label": "命令面板",
+  "commandPalette.placeholder": "搜索命令…",
+  "commandPalette.empty": "没有结果",
+  "commandPalette.sessions": "会话",
+  "commandPalette.actions": "操作",
+  "commandPalette.models": "模型",
+  "commandPalette.newSession": "新建会话",
+  "commandPalette.toggleTheme": "切换主题",
+  "commandPalette.currentModel": "当前模型",
+  "commandPalette.notAvailable": "由聊天管理",
+  "commandPalette.hints": "↑↓ 导航 · ↵ 选择 · esc 关闭"
 }
