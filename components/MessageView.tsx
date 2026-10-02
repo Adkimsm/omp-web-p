@@ -766,9 +766,8 @@ const ToolCallBlock = memo(function ToolCallBlock({ block, result, duration }: {
 
         {/* ── Expanded: input args ── */}
         {!isEditTool && (
-          <pre
+          <CollapsiblePanel
             style={{
-              margin: 0,
               padding: "8px 10px",
               color: "var(--text-muted)",
               fontSize: 12,
@@ -781,22 +780,24 @@ const ToolCallBlock = memo(function ToolCallBlock({ block, result, duration }: {
             }}
           >
             {inputStr}
-          </pre>
+          </CollapsiblePanel>
         )}
 
         {/* ── Paired result — only shown when expanded ── */}
         {result && (
-          resultDiff ? (
-            <PairedDiffResult
-              diff={resultDiff}
-            />
-          ) : (
-            <PairedResult
-              text={resultText ?? ""}
-              isEmpty={resultIsEmpty}
-              isError={isError}
-            />
-          )
+          <CollapsiblePanel>
+            {resultDiff ? (
+              <PairedDiffResult
+                diff={resultDiff}
+              />
+            ) : (
+              <PairedResult
+                text={resultText ?? ""}
+                isEmpty={resultIsEmpty}
+                isError={isError}
+              />
+            )}
+          </CollapsiblePanel>
         )}
       </Collapsible>
     </div>
