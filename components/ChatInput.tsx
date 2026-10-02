@@ -1068,6 +1068,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
 
   return (
     <div
+      className="chat-input-shell"
       style={{
         flexShrink: 0,
         background: "transparent",

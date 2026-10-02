@@ -1120,3 +1120,59 @@ span.linenumber {
     padding-bottom: max(10px, env(safe-area-inset-bottom)) !important;
   }
 }
+
+/* Small-screen layout refinements. Keep the dense desktop controls usable while
+   giving mobile browsers room for touch targets and display cutouts. */
+@media (max-width: 640px) {
+  .app-shell-root {
+    min-height: 100dvh;
+  }
+
+  .app-top-bar {
+    height: 44px !important;
+    min-height: 44px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    padding-top: env(safe-area-inset-top);
+    box-sizing: content-box;
+  }
+
+  .app-top-bar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .app-top-bar > button,
+  .app-top-bar > div > button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .sidebar-container {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .chat-input-shell {
+    padding-bottom: max(8px, env(safe-area-inset-bottom));
+  }
+
+  .file-tab-bar {
+    height: 44px !important;
+    align-items: stretch !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .file-tab-bar > div {
+    height: 44px !important;
+    min-width: 112px;
+  }
+
+  .markdown-body pre,
+  .markdown-body .markdown-code-block,
+  .markdown-file-preview pre {
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
