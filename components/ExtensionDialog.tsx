@@ -30,17 +30,27 @@ export function ExtensionDialog({
   onRespond,
 }: {
   request: ExtensionDialogRequest;
-  onRespond: (request: ExtensionDialogRequest, response: ExtensionDialogResponse) => void;
+  onRespond: (request: ExtensionDialogRequest, response: ExtensionDialogResponse) => Promise<void>;
 }) {
   const { t } = useI18n();
   const [value, setValue] = useState(request.method === "editor" ? request.prefill ?? "" : "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     setValue(request.method === "editor" ? request.prefill ?? "" : "");
+    setError(null);
   }, [request]);
 
-  const cancel = () => onRespond(request, { cancelled: true });
-
+  const respond = async (response: ExtensionDialogResponse) => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try { await onRespond(request, response); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setBusy(false); }
+  };
+  const cancel = () => void respond({ cancelled: true });
   // useModalDialog gives us: focus-in on open, focus-restore on close,
   // document-level Escape (top-of-stack), and Tab wrapping inside the panel.
   const panelRef = useModalDialog<HTMLDivElement>({
@@ -50,9 +60,9 @@ export function ExtensionDialog({
 
   const submitValue = () => {
     if (request.method === "confirm") {
-      onRespond(request, { confirmed: true });
+      void respond({ confirmed: true });
     } else {
-      onRespond(request, { value });
+      void respond({ value });
     }
   };
 
@@ -90,8 +100,11 @@ export function ExtensionDialog({
           boxShadow: "0 20px 60px rgba(0,0,0,0.28)",
           overflow: "hidden",
           outline: "none",
+          opacity: busy ? 0.7 : 1,
+          pointerEvents: busy ? "none" : "auto",
         }}
       >
+        {error && <div role="alert" style={{ padding: "8px 14px", color: "var(--accent-strong)", fontSize: 12, borderBottom: "1px solid var(--border)" }}>{error}</div>}
         <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--border)" }}>
           <div style={{ color: "var(--text)", fontSize: 14, fontWeight: 650 }}>{request.title}</div>
           <div style={{ marginTop: 3, color: "var(--text-dim)", fontSize: 11, fontFamily: "var(--font-mono)" }}>{t("chatWindow.extensionRequest")}</div>
@@ -106,7 +119,7 @@ export function ExtensionDialog({
               {request.options.map((option) => (
                 <button
                   key={option}
-                  onClick={() => onRespond(request, { value: option })}
+                  onClick={() => void respond({ value: option })}
                   style={{
                     width: "100%",
                     padding: "9px 10px",

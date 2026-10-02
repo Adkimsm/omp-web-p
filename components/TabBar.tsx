@@ -9,7 +9,10 @@ export interface Tab {
   id: string;
   label: string;
   filePath: string;
+  cwd: string | null;
   sourceSessionId?: string | null;
+  initialMode?: "source" | "diff";
+  diffMode?: "combined" | "staged" | "unstaged";
 }
 
 interface Props {

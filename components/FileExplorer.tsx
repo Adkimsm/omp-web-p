@@ -25,7 +25,7 @@ import {
   joinFilePath,
   normalizeFilePathSlashes,
 } from "@/lib/file-paths";
-import type { GitFileStatus, GitFileStatusKind, GitStatusResponse } from "@/lib/git-types";
+import type { GitDiffMode, GitFileStatus, GitFileStatusKind, GitStatusResponse } from "@/lib/git-types";
 
 interface FileEntry {
   name: string;
@@ -46,6 +46,7 @@ interface FileNode {
 interface Props {
   cwd: string;
   onOpenFile: (filePath: string, fileName: string) => void;
+  onOpenChange?: (filePath: string, cwd: string, diffMode: GitDiffMode) => void;
   refreshKey?: number;
   onAtMention?: (relativePath: string, isDir: boolean) => void;
   onAtMentions?: (relativePaths: string[]) => void;
@@ -464,6 +465,7 @@ function TreeNode({
 export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileExplorer({
   cwd,
   onOpenFile,
+  onOpenChange,
   refreshKey,
   onAtMention,
   onAtMentions,
@@ -477,6 +479,11 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
   const [treeRefreshKey, setTreeRefreshKey] = useState(0);
   const [highlightedPaths, setHighlightedPaths] = useState<Set<string>>(new Set());
   const [gitFiles, setGitFiles] = useState<GitFileStatus[]>([]);
+  const [gitRepository, setGitRepository] = useState<boolean | null>(null);
+  const [gitLoading, setGitLoading] = useState(false);
+  const [gitError, setGitError] = useState<string | null>(null);
+  const [explorerView, setExplorerView] = useState<"files" | "changes">("files");
+  const [diffMode, setDiffMode] = useState<GitDiffMode>("combined");
   const [uploadPhase, setUploadPhase] = useState<UploadPhase>("idle");
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -639,13 +646,21 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
 
   useEffect(() => {
     let cancelled = false;
+    setGitLoading(true);
+    setGitError(null);
     fetchGitStatus(cwd)
       .then((status) => {
-        if (!cancelled) setGitFiles(status.isGitRepository ? status.files : []);
+        if (cancelled) return;
+        setGitRepository(status.isGitRepository);
+        setGitFiles(status.isGitRepository ? status.files : []);
       })
-      .catch(() => {
-        if (!cancelled) setGitFiles([]);
-      });
+      .catch((failure) => {
+        if (cancelled) return;
+        setGitRepository(null);
+        setGitFiles([]);
+        setGitError(failure instanceof Error ? failure.message : String(failure));
+      })
+      .finally(() => { if (!cancelled) setGitLoading(false); });
     return () => { cancelled = true; };
   }, [cwd, refreshKey, treeRefreshKey]);
 
@@ -660,6 +675,22 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
 
   return (
     <div style={{ minHeight: "100%" }}>
+      <div style={{ display: "flex", gap: 2, padding: "6px 6px 4px", borderBottom: "1px solid var(--border)" }} role="tablist" aria-label={t("fileExplorer.viewMode")}>
+        <button type="button" role="tab" aria-selected={explorerView === "files"} onClick={() => setExplorerView("files")} style={{ flex: 1, border: "1px solid var(--border)", borderRadius: "var(--radius-control)", padding: "4px 6px", fontSize: 11, background: explorerView === "files" ? "var(--bg-selected)" : "transparent", color: "var(--text)", cursor: "pointer" }}>{t("fileExplorer.files")}</button>
+        <button type="button" role="tab" aria-selected={explorerView === "changes"} onClick={() => setExplorerView("changes")} style={{ flex: 1, border: "1px solid var(--border)", borderRadius: "var(--radius-control)", padding: "4px 6px", fontSize: 11, background: explorerView === "changes" ? "var(--bg-selected)" : "transparent", color: "var(--text)", cursor: "pointer" }}>{t("fileExplorer.changes")}</button>
+      </div>
+      {explorerView === "changes" && (
+        <div style={{ padding: "2px 4px" }}>
+          <div style={{ display: "flex", gap: 3, padding: "4px" }} role="tablist" aria-label={t("fileExplorer.changeFilter")}>
+            {(["combined", "staged", "unstaged"] as const).map((mode) => <button key={mode} type="button" onClick={() => setDiffMode(mode)} style={{ border: "none", borderRadius: "var(--radius-control)", padding: "3px 6px", fontSize: 10, background: diffMode === mode ? "var(--bg-selected)" : "transparent", color: "var(--text-muted)", cursor: "pointer" }}>{t(`fileExplorer.${mode}`)}</button>)}
+          </div>
+          {gitLoading ? <div style={{ padding: "8px 12px", fontSize: 11, color: "var(--text-dim)" }}>{t("fileExplorer.loadingChanges")}</div> : gitError ? <div role="alert" style={{ padding: "8px 12px", fontSize: 11, color: "#f87171" }}>{gitError}</div> : gitRepository === false ? <div style={{ padding: "8px 12px", fontSize: 11, color: "var(--text-dim)" }}>{t("fileExplorer.notGitRepository")}</div> : gitRepository === true ? (() => {
+            const rows = gitFiles.filter((status) => diffMode !== "staged" || (status.status !== "untracked" && status.indexStatus !== " " && status.indexStatus !== "?")).filter((status) => diffMode !== "unstaged" || status.worktreeStatus !== " ").sort((a, b) => getRelativeFilePath(a.filePath, cwd).localeCompare(getRelativeFilePath(b.filePath, cwd)));
+            return rows.length === 0 ? <div style={{ padding: "8px 12px", fontSize: 11, color: "var(--text-dim)" }}>{t("fileExplorer.noChanges")}</div> : rows.map((status) => <button key={status.filePath} type="button" onClick={() => onOpenChange?.(status.filePath, cwd, diffMode)} style={{ width: "100%", display: "flex", alignItems: "center", gap: 6, border: "none", background: "transparent", color: "var(--text)", padding: "6px 8px", textAlign: "left", cursor: onOpenChange ? "pointer" : "default", fontSize: 11 }} title={t(GIT_STATUS_LABEL_KEYS[status.status])}><span style={{ color: GIT_STATUS_COLORS[status.status], fontWeight: 700, width: 14, flexShrink: 0 }}>{status.status === "conflict" ? "!" : status.code}</span><span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{getRelativeFilePath(status.filePath, cwd)}</span><span style={{ color: "var(--text-dim)", fontSize: 9 }}>{status.indexStatus !== " " && status.indexStatus !== "?" ? "S" : ""}{status.worktreeStatus !== " " ? "W" : ""}</span></button>);
+          })() : null}
+        </div>
+      )}
+      {explorerView === "files" && (<>
       <input ref={uploadInputRef} type="file" multiple hidden onChange={handleUploadInput} />
       {showUploadFeedback && (
         <div style={{ padding: "6px 8px", borderBottom: "1px solid var(--border)" }}>
@@ -800,6 +831,7 @@ export const FileExplorer = forwardRef<FileExplorerHandle, Props>(function FileE
           </div>
         )}
       </div>
+      </>)}
     </div>
   );
 });

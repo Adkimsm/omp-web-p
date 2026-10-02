@@ -77,9 +77,11 @@ type AgentStateResponse = {
   isPromptRunning?: boolean;
   isBashRunning?: boolean;
   isCompacting?: boolean;
+  isSettled?: boolean;
+  hasPendingAsyncWork?: boolean;
+  queuedMessages?: QueuedMessages;
   extensionStatuses?: ExtensionStatusItem[];
   extensionWidgets?: ExtensionWidgetItem[];
-  // omp only reports a count; the queued texts are tracked client-side.
   queuedMessageCount?: number;
   todoPhases?: TodoPhase[];
 };
@@ -91,64 +93,6 @@ export interface QueuedMessages {
 
 const EMPTY_QUEUE: QueuedMessages = { steering: [], followUp: [] };
 
-// omp reports only queuedMessageCount over RPC; the queued texts live in React
-// state and would vanish on reload. Mirror them into sessionStorage (per
-// session, best-effort, size-bounded) so a reload can restore the queue panel.
-const QUEUE_STORAGE_PREFIX = "omp-queue-";
-const QUEUE_STORAGE_MAX_CHARS = 50_000;
-
-function isEmptyQueue(queue: QueuedMessages): boolean {
-  return queue.steering.length === 0 && queue.followUp.length === 0;
-}
-
-function readPersistedQueue(sessionId: string): QueuedMessages | null {
-  try {
-    const raw = sessionStorage.getItem(QUEUE_STORAGE_PREFIX + sessionId);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<QueuedMessages> | null;
-    const onlyStrings = (value: unknown): string[] =>
-      Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
-    const queue = { steering: onlyStrings(parsed?.steering), followUp: onlyStrings(parsed?.followUp) };
-    return isEmptyQueue(queue) ? null : queue;
-  } catch {
-    return null;
-  }
-}
-
-function persistQueue(sessionId: string, queue: QueuedMessages): void {
-  try {
-    const key = QUEUE_STORAGE_PREFIX + sessionId;
-    if (isEmptyQueue(queue)) {
-      sessionStorage.removeItem(key);
-      return;
-    }
-    // Size bound: drop oldest texts until the payload fits.
-    let bounded = queue;
-    let raw = JSON.stringify(bounded);
-    while (raw.length > QUEUE_STORAGE_MAX_CHARS && bounded.steering.length + bounded.followUp.length > 1) {
-      bounded = bounded.steering.length >= bounded.followUp.length
-        ? { ...bounded, steering: bounded.steering.slice(1) }
-        : { ...bounded, followUp: bounded.followUp.slice(1) };
-      raw = JSON.stringify(bounded);
-    }
-    if (raw.length > QUEUE_STORAGE_MAX_CHARS) {
-      sessionStorage.removeItem(key);
-      return;
-    }
-    sessionStorage.setItem(key, raw);
-  } catch {
-    // Best-effort only (quota exceeded, private mode, SSR).
-  }
-}
-
-function clearPersistedQueue(sessionId: string | null): void {
-  if (!sessionId) return;
-  try {
-    sessionStorage.removeItem(QUEUE_STORAGE_PREFIX + sessionId);
-  } catch {
-    // ignore storage errors
-  }
-}
 
 function normalizeThinkingLevel(level: string | undefined): ThinkingLevelOption {
   // omp's "inherit" sentinel means "no explicit selection" — show as auto.
@@ -460,10 +404,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const [slashCommandsLoading, setSlashCommandsLoading] = useState(false);
   const [noticeState, dispatchNotice] = useReducer(noticeReducer, { visible: [], pending: [] });
   const [sessionStatsOverride, setSessionStatsOverride] = useState<SessionStatsInfo | null>(null);
-  const [extensionDialog, setExtensionDialog] = useState<ExtensionUiDialogRequest | null>(null);
   const [extensionCustomUi, setExtensionCustomUi] = useState<ExtensionUiCustomRequest | null>(null);
   const [extensionStatuses, setExtensionStatuses] = useState<ExtensionStatusItem[]>([]);
   const [extensionWidgets, setExtensionWidgets] = useState<ExtensionWidgetItem[]>([]);
+  const [extensionDialogs, setExtensionDialogs] = useState<ExtensionUiDialogRequest[]>([]);
+  const extensionDialog = extensionDialogs[0] ?? null;
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessages>({ steering: [], followUp: [] });
   const [activeSubagentCount, setActiveSubagentCount] = useState(0);
   const [todoPhases, setTodoPhases] = useState<TodoPhase[]>([]);
@@ -489,8 +434,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
   const optimisticUserMessageKeyRef = useRef<string | null>(null);
   const activeSubagentIdsRef = useRef<Set<string>>(new Set());
   // True once this mount has persisted a non-empty queue: gates removal so a
-  // just-mounted empty state cannot wipe a stored queue before restore runs.
-  const queuePersistDirtyRef = useRef(false);
   const eventCoalescerRef = useRef<MessageUpdateCoalescer | null>(null);
   if (eventCoalescerRef.current === null) {
     eventCoalescerRef.current = createMessageUpdateCoalescer((event) => {
@@ -603,7 +546,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (liveState.extensionStatuses !== undefined) setExtensionStatuses(liveState.extensionStatuses ?? []);
           if (liveState.extensionWidgets !== undefined) setExtensionWidgets(liveState.extensionWidgets ?? []);
           if (liveState.todoPhases !== undefined) setTodoPhases(liveState.todoPhases ?? []);
-          if (liveState.queuedMessageCount === 0) setQueuedMessages(EMPTY_QUEUE);
+          if (liveState.queuedMessages !== undefined) setQueuedMessages(liveState.queuedMessages);
         } else if (!agentState.running) {
           setQueuedMessages(EMPTY_QUEUE);
         }
@@ -776,17 +719,9 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     response: { value: string } | { confirmed: boolean } | { cancelled: true },
   ) => {
     const sid = sessionIdRef.current;
-    setExtensionDialog((current) => current?.id === request.id ? null : current);
     if (!sid) return;
-    try {
-      await sendAgentCommand(sid, {
-        type: "extension_ui_response",
-        id: request.id,
-        ...response,
-      });
-    } catch (e) {
-      console.error("Failed to send extension UI response:", e);
-    }
+    await sendAgentCommand(sid, { type: "extension_ui_response", id: request.id, ...response });
+    setExtensionDialogs((current) => current.filter((item) => item.id !== request.id));
   }, []);
 
   const sendExtensionCustomInput = useCallback(async (request: ExtensionUiCustomRequest, data: string) => {
@@ -842,10 +777,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       case "confirm":
       case "input":
       case "editor":
-        setExtensionDialog(request);
+        setExtensionDialogs((current) => {
+          const rest = current.filter((item) => item.id !== request.id);
+          return [...rest, request];
+        });
         break;
       case "cancel":
-        setExtensionDialog((current) => current?.id === request.targetId ? null : current);
+        setExtensionDialogs((current) => current.filter((item) => item.id !== request.targetId));
         break;
       case "open_url": {
         // OAuth and similar flows: try to open a tab (often blocked outside a
@@ -903,6 +841,16 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         break;
     }
   }, [addNotice, opts.chatInputRef]);
+  useEffect(() => {
+    setExtensionDialogs([]);
+    const expire = () => {
+      const now = Date.now();
+      setExtensionDialogs((current) => current.filter((request) => request.expiresAt === undefined || request.expiresAt > now));
+    };
+    expire();
+    const timer = setInterval(expire, 1000);
+    return () => clearInterval(timer);
+  }, [session?.id]);
 
   const finishPromptWithoutStream = useCallback(async (sid: string | null = sessionIdRef.current, runId?: number) => {
     // Bail out before loadSession too: a stale finish for a previous run
@@ -997,12 +945,10 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       // would otherwise leave the "Stop compaction" UI stuck. No state
       // (wrapper destroyed) means nothing is compacting.
       setIsCompacting(state?.isCompacting ?? false);
-      // Also mid-run: this poll is the only todo-phase refresh while streaming.
       if (state?.todoPhases !== undefined) setTodoPhases(state.todoPhases ?? []);
-      if (!state || state.queuedMessageCount === 0) setQueuedMessages(EMPTY_QUEUE);
+      if (state?.queuedMessages !== undefined) setQueuedMessages(state.queuedMessages);
       const busy = data.running && state
-        && (state.isStreaming || state.isPromptRunning || state.isCompacting);
-      if (busy || !agentRunningRef.current) return;
+        && (!state.isSettled || state.hasPendingAsyncWork || state.isStreaming || state.isPromptRunning || state.isCompacting || (state.queuedMessages?.steering.length ?? 0) > 0 || (state.queuedMessages?.followUp.length ?? 0) > 0);
       if (state) {
         if (state.contextUsage !== undefined) setContextUsage(state.contextUsage ?? null);
         if (state.systemPrompt !== undefined) setSystemPrompt(state.systemPrompt ?? null);
@@ -1043,28 +989,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     agentRunningRef.current = agentRunning;
   }, [agentRunning]);
 
-  const consumeQueuedMessage = useCallback((text: string) => {
-    if (!text) return;
-    setQueuedMessages((prev) => {
-      const si = prev.steering.indexOf(text);
-      if (si !== -1) return { ...prev, steering: prev.steering.filter((_, i) => i !== si) };
-      const fi = prev.followUp.indexOf(text);
-      if (fi !== -1) return { ...prev, followUp: prev.followUp.filter((_, i) => i !== fi) };
-      return prev;
-    });
+  const refreshQueuedMessages = useCallback(async (sid: string) => {
+    const response = await fetch(`/api/agent/${encodeURIComponent(sid)}`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const payload = await response.json() as { state?: AgentStateResponse };
+    setQueuedMessages(payload.state?.queuedMessages ?? EMPTY_QUEUE);
   }, []);
 
-  // Mirror queued texts into sessionStorage so a reload can restore them.
-  // The dirty gate keeps the initial empty state from wiping a stored queue
-  // before the mount-time restore has run.
-  useEffect(() => {
-    const sid = sessionIdRef.current;
-    if (!sid) return;
-    const empty = isEmptyQueue(queuedMessages);
-    if (empty && !queuePersistDirtyRef.current) return;
-    queuePersistDirtyRef.current = !empty;
-    persistQueue(sid, queuedMessages);
-  }, [queuedMessages]);
 
   const handleAgentEvent = useCallback((event: AgentEvent) => {
     switch (event.type) {
@@ -1075,42 +1006,20 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         dispatch({ type: "start" });
         break;
       case "agent_end":
-        // isTerminal === false means an async delivery resumes this run soon.
-        if (event.isTerminal === false) break;
-        // A late agent_end can arrive over SSE after reconcileAgentState
-        // already finished this run — don't re-trigger completion.
+        if (event.isTerminal === false || !agentRunningRef.current) break;
+        if (sessionIdRef.current) void reconcileAgentState(sessionIdRef.current);
+        break;
+      case "session_settled":
         if (!agentRunningRef.current) break;
-        agentRunningRef.current = false;
-        setAgentRunning(false);
-        setAgentPhase(null);
-        setRetryInfo(null);
-        activeSubagentIdsRef.current.clear();
-        setActiveSubagentCount(0);
-        dispatch({ type: "end" });
-        if (sessionIdRef.current) {
-          loadSession(sessionIdRef.current);
-          fetch(`/api/agent/${encodeURIComponent(sessionIdRef.current)}`)
-            .then((r) => r.json())
-            .then((d: { state?: AgentStateResponse }) => {
-              if (d.state?.contextUsage !== undefined) setContextUsage(d.state.contextUsage ?? null);
-              if (d.state?.systemPrompt !== undefined) setSystemPrompt(d.state.systemPrompt || null);
-              if (d.state?.extensionStatuses !== undefined) setExtensionStatuses(d.state.extensionStatuses ?? []);
-              if (d.state?.extensionWidgets !== undefined) setExtensionWidgets(d.state.extensionWidgets ?? []);
-              if (d.state?.todoPhases !== undefined) setTodoPhases(d.state.todoPhases ?? []);
-              // omp reports only a queued count; an empty (or dead) session
-              // means the client-tracked queue texts are stale.
-              if (!d.state || d.state.queuedMessageCount === 0) setQueuedMessages(EMPTY_QUEUE);
-            })
-            .catch(() => {});
-        }
-        onAgentEnd?.();
+        void finishPromptWithoutStream(sessionIdRef.current, promptRunIdRef.current);
         break;
       case "prompt_result":
-        // A prompt handled entirely by a builtin/extension slash command:
-        // no agent_start/agent_end pair will follow.
-        if (event.agentInvoked !== false) break;
-        if (!agentRunningRef.current) break;
-        void finishPromptWithoutStream(sessionIdRef.current);
+        if (event.status === "error") {
+          addNotice({ type: "error", message: (event.error as { message?: string } | undefined)?.message ?? translate("agentSession.commandFailed") });
+        } else if (event.status === "aborted") {
+          addNotice({ type: "info", message: translate("agentSession.stopped") });
+        }
+        if (event.sessionSettled === true && agentRunningRef.current) void finishPromptWithoutStream(sessionIdRef.current, promptRunIdRef.current);
         break;
       case "prompt_error":
         addNotice({ type: "error", message: (event.errorMessage as string | undefined) ?? translate("agentSession.commandFailed") });
@@ -1170,8 +1079,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           const deliveredKey = userMessageKey(delivered);
           const optimisticKey = optimisticUserMessageKeyRef.current;
           optimisticUserMessageKeyRef.current = null;
-          // Delivered steering/follow-up texts leave the client-tracked queue.
-          consumeQueuedMessage(extractMessageText(delivered));
           setMessages((prev) => {
             const last = prev[prev.length - 1];
             if (optimisticKey && last?.role === "user" && userMessageKey(last) === optimisticKey) {
@@ -1246,7 +1153,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         handleExtensionUiRequest(event as unknown as IncomingExtensionUiRequest);
         break;
     }
-  }, [addNotice, consumeQueuedMessage, finishPromptWithoutStream, handleExtensionUiRequest, loadSession, onAgentEnd]);
+  }, [addNotice, finishPromptWithoutStream, handleExtensionUiRequest, loadSession, onAgentEnd]);
   handleAgentEventRef.current = handleAgentEvent;
 
   const handleSend = useCallback(async (message: string, images?: AttachedImage[]) => {
@@ -1605,13 +1512,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
       });
       // omp emits no queue snapshots; track the queued text locally until it
       // is delivered (user message_end) or the queue count drops to zero.
-      setQueuedMessages((prev) => ({ ...prev, steering: [...prev.steering, message] }));
+      await refreshQueuedMessages(sid);
     } catch (e) {
       console.error("Failed to steer:", e);
       addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
       opts.chatInputRef?.current?.insertIfEmpty(message);
     }
-  }, [addNotice, opts.chatInputRef]);
+  }, [addNotice, opts.chatInputRef, refreshQueuedMessages]);
 
   const handlePromptWithStreamingBehavior = useCallback(async (
     message: string,
@@ -1628,15 +1535,13 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         streamingBehavior: behavior,
         ...(piImages?.length ? { images: piImages } : {}),
       });
-      setQueuedMessages((prev) => behavior === "steer"
-        ? { ...prev, steering: [...prev.steering, message] }
-        : { ...prev, followUp: [...prev.followUp, message] });
+      await refreshQueuedMessages(sid);
     } catch (e) {
       console.error("Failed to queue prompt:", e);
       addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
       opts.chatInputRef?.current?.insertIfEmpty(message);
     }
-  }, [addNotice, opts.chatInputRef]);
+  }, [addNotice, opts.chatInputRef, refreshQueuedMessages]);
 
   const handleFollowUp = useCallback(async (message: string, images?: AttachedImage[]) => {
     const sid = sessionIdRef.current;
@@ -1648,14 +1553,37 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         message,
         ...(piImages?.length ? { images: piImages } : {}),
       });
-      setQueuedMessages((prev) => ({ ...prev, followUp: [...prev.followUp, message] }));
+      await refreshQueuedMessages(sid);
     } catch (e) {
       console.error("Failed to follow up:", e);
       addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
       opts.chatInputRef?.current?.insertIfEmpty(message);
     }
-  }, [addNotice, opts.chatInputRef]);
+  }, [addNotice, opts.chatInputRef, refreshQueuedMessages]);
 
+  const handleRemoveQueuedMessage = useCallback(async (message: string, queue: "steering" | "followUp") => {
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+    try {
+      await sendAgentCommand(sid, { type: "remove_queued_message", message, queue });
+      await refreshQueuedMessages(sid);
+    } catch (e) {
+      addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
+    }
+  }, [addNotice, refreshQueuedMessages]);
+
+  const handlePromoteQueuedMessage = useCallback(async (message: string) => {
+    const sid = sessionIdRef.current;
+    if (!sid) return;
+    try {
+      await sendAgentCommand(sid, { type: "promote_queued_message", message });
+      await refreshQueuedMessages(sid);
+    } catch (e) {
+      addNotice({ type: "error", message: e instanceof Error ? e.message : String(e) });
+    }
+  }, [addNotice, refreshQueuedMessages]);
+
+  const handleRecallQueue: undefined = undefined;
   const handleAbortCompaction = useCallback(async () => {
     const sid = sessionIdRef.current;
     if (!sid) return;
@@ -1666,10 +1594,6 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     }
   }, []);
 
-  // omp's RPC protocol has no clear_queue command, so queued messages cannot
-  // be recalled into the editor. Exported as undefined so ChatInput hides the
-  // recall button entirely.
-  const handleRecallQueue: (() => void) | undefined = undefined;
 
   const handleThinkingLevelChange = useCallback(async (level: ThinkingLevelOption) => {
     setThinkingLevel(level);
@@ -1752,19 +1676,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
           if (agentState.state.thinkingLevel !== undefined) setThinkingLevel(normalizeThinkingLevel(agentState.state.thinkingLevel));
           if (agentState.state.extensionStatuses !== undefined) setExtensionStatuses(agentState.state.extensionStatuses ?? []);
           if (agentState.state.extensionWidgets !== undefined) setExtensionWidgets(agentState.state.extensionWidgets ?? []);
-          if (agentState.state.queuedMessageCount === 0) {
-            setQueuedMessages(EMPTY_QUEUE);
-            // The queue drained while the page was closed — a stored copy
-            // from a previous page load is stale.
-            clearPersistedQueue(session.id);
-          } else if (typeof agentState.state.queuedMessageCount === "number") {
-            // omp still holds queued messages: restore the client-tracked
-            // texts persisted by the previous page load.
-            const persisted = readPersistedQueue(session.id);
-            if (persisted) {
-              setQueuedMessages((prev) => (isEmptyQueue(prev) ? persisted : prev));
-            }
-          }
+          if (agentState.state.queuedMessages !== undefined) setQueuedMessages(agentState.state.queuedMessages);
         }
       });
     }
@@ -1872,7 +1784,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     agentRunning, modelNames, modelList, modelError, modelThinkingLevels, modelThinkingLevelMaps, newSessionModel, toolPreset, thinkingLevel,
     retryInfo, contextUsage, systemPrompt, forkingEntryId,
     isCompacting, compactError, compactResult, currentModel, displayModel, sessionStats,
-    slashCommands, slashCommandsLoading, queuedMessages,
+    slashCommands, slashCommandsLoading, queuedMessages, todoPhases,
     notices: noticeState.visible, extensionDialog, extensionCustomUi, extensionStatuses, extensionWidgets, respondToExtensionUi, sendExtensionCustomInput,
     isAutoModelSelection: isNew && newSessionModel === null,
     agentPhase,
@@ -1883,8 +1795,7 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
     lastUserMsgRef, pendingScrollToUserRef, initialScrollDoneRef,
     // Actions
     handleSend, handleAbort, handleFork, handleNavigate, handleModelChange,
-    handleCompact, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction,
-    handleRecallQueue,
+    handleCompact, handleSteer, handleFollowUp, handlePromptWithStreamingBehavior, handleAbortCompaction, handleRemoveQueuedMessage, handlePromoteQueuedMessage,
     handleBuiltinSlashCommand,
     handleToolPresetChange, handleThinkingLevelChange, loadTools, loadSlashCommands, setActiveLeafId, setData, setMessages,
     dispatch, setAgentRunning, setForkingEntryId,

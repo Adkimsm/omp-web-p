@@ -15,12 +15,13 @@ import { useI18n } from "@/lib/i18n";
 import { formatApiError } from "@/lib/i18n/api-error";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { copyText } from "@/lib/clipboard";
-import { getFileName } from "@/lib/file-paths";
+import { getFileName, joinFilePath } from "@/lib/file-paths";
 import { buildAtMentionText, buildFileAtMentionsText, buildFileLineMentionText } from "@/lib/file-fuzzy";
 import { getInitialNavigation } from "@/lib/initial-navigation";
 import type { SessionInfo, SessionTreeNode } from "@/lib/types";
 import type { ChatInputHandle } from "./ChatInput";
 import type { SessionStatsInfo } from "@/lib/pi-types";
+import type { GitDiffMode } from "@/lib/git-types";
 
 // Loaded on demand: the config modals open on click and the file viewer only
 // renders once a file tab exists, so none of them belong in the first-load chunk.
@@ -103,6 +104,47 @@ export function AppShell() {
   }, []);
   const chatInputRef = useRef<ChatInputHandle | null>(null);
   const topBarRef = useRef<HTMLDivElement>(null);
+  const shellRef = useRef<HTMLDivElement>(null);
+  const [layout, setLayout] = useState({ sidebar: 260, fileRatio: 0.42 });
+  const resizingRef = useRef<"sidebar" | "file" | null>(null);
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("omp-workbench-layout") ?? "null") as unknown;
+      if (saved && typeof saved === "object" && "sidebar" in saved && "fileRatio" in saved && typeof saved.sidebar === "number" && typeof saved.fileRatio === "number") {
+        setLayout({ sidebar: Math.min(360, Math.max(220, saved.sidebar)), fileRatio: Math.min(0.55, Math.max(280 / Math.max(window.innerWidth, 1), saved.fileRatio)) });
+      }
+    } catch { /* ignore malformed storage */ }
+  }, []);
+  useEffect(() => { try { localStorage.setItem("omp-workbench-layout", JSON.stringify(layout)); } catch { /* storage unavailable */ } }, [layout]);
+  const clampLayout = useCallback((next: { sidebar: number; fileRatio: number }) => {
+    const width = shellRef.current?.clientWidth ?? window.innerWidth;
+    const sidebar = Math.min(360, Math.max(220, next.sidebar));
+    const maxFile = Math.min(width * 0.55, Math.max(280, width - sidebar - 360));
+    const fileRatio = Math.min(maxFile / Math.max(width, 1), Math.max(280 / Math.max(width, 1), next.fileRatio));
+    setLayout({ sidebar, fileRatio });
+  }, []);
+  const beginResize = useCallback((kind: "sidebar" | "file") => {
+    if (isMobile) return;
+    resizingRef.current = kind;
+    const move = (event: PointerEvent) => {
+      const rect = shellRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      if (kind === "sidebar") clampLayout({ ...layout, sidebar: event.clientX - rect.left });
+      else clampLayout({ ...layout, fileRatio: (rect.right - event.clientX) / rect.width });
+    };
+    const stop = () => { resizingRef.current = null; window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", stop); };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", stop);
+  }, [clampLayout, isMobile, layout]);
+  const nudgeResize = useCallback((kind: "sidebar" | "file", delta: number) => {
+    if (kind === "sidebar") clampLayout({ ...layout, sidebar: layout.sidebar + delta });
+    else clampLayout({ ...layout, fileRatio: layout.fileRatio + delta / Math.max(shellRef.current?.clientWidth ?? window.innerWidth, 1) });
+  }, [clampLayout, layout]);
+  const resizeKeyDown = useCallback((kind: "sidebar" | "file", event: React.KeyboardEvent) => {
+    if (event.key === "ArrowLeft" || event.key === "ArrowDown") { event.preventDefault(); nudgeResize(kind, -16); }
+    else if (event.key === "ArrowRight" || event.key === "ArrowUp") { event.preventDefault(); nudgeResize(kind, 16); }
+    else if (event.key === "Home") { event.preventDefault(); clampLayout(kind === "sidebar" ? { ...layout, sidebar: 220 } : { ...layout, fileRatio: 280 / Math.max(shellRef.current?.clientWidth ?? window.innerWidth, 1) }); }
+    else if (event.key === "End") { event.preventDefault(); clampLayout(kind === "sidebar" ? { ...layout, sidebar: 360 } : { ...layout, fileRatio: 0.55 }); }
+  }, [clampLayout, layout, nudgeResize]);
 
   // Branch navigator state — populated by ChatWindow via onBranchDataChange
   const [branchTree, setBranchTree] = useState<SessionTreeNode[]>([]);
@@ -419,23 +461,38 @@ export function AppShell() {
     }
   }, [selectedSession, router]);
 
-  const handleOpenFile = useCallback((filePath: string, fileName: string, sourceSessionId?: string | null) => {
-    const tabId = `file:${filePath}`;
+  const handleOpenFile = useCallback((filePath: string, fileName: string, sourceSessionId?: string | null, sourceCwd?: string | null) => {
+    const cwd = sourceCwd ?? selectedSession?.cwd ?? activeCwd;
+    const tabId = `file:${cwd ?? ""}:${filePath}`;
     setFileTabs((prev) => {
       const existing = prev.find((t) => t.id === tabId);
-      if (!existing) return [...prev, { id: tabId, label: fileName, filePath, sourceSessionId }];
+      if (!existing) return [...prev, { id: tabId, label: fileName, filePath, cwd, sourceSessionId, initialMode: "source" }];
       if (!sourceSessionId || existing.sourceSessionId === sourceSessionId) return prev;
       return prev.map((t) => t.id === tabId ? { ...t, sourceSessionId } : t);
     });
     setActiveFileTabId(tabId);
     setRightPanelOpen(true);
-    // On mobile the file panel is full-screen; close the drawer so it shows.
     if (isMobile) setSidebarOpen(false);
-  }, [isMobile]);
+  }, [activeCwd, isMobile, selectedSession?.cwd]);
+  const handleOpenChange = useCallback((filePath: string, cwd: string, diffMode: GitDiffMode) => {
+    const tabId = `file:${cwd}:${filePath}`;
+    setFileTabs((prev) => {
+      const existing = prev.find((tab) => tab.id === tabId);
+      if (!existing) return [...prev, { id: tabId, label: getFileName(filePath), filePath, cwd, sourceSessionId: selectedSession?.id ?? null, initialMode: "diff", diffMode }];
+      return prev.map((tab) => tab.id === tabId ? { ...tab, initialMode: "diff", diffMode } : tab);
+    });
+    setActiveFileTabId(tabId);
+    setRightPanelOpen(true);
+    if (isMobile) setSidebarOpen(false);
+  }, [isMobile, selectedSession?.id]);
+  const handleOpenPaletteFile = useCallback((relativePath: string) => {
+    if (!activeCwd) return;
+    handleOpenFile(joinFilePath(activeCwd, relativePath), getFileName(relativePath), selectedSession?.id ?? null, activeCwd);
+  }, [activeCwd, handleOpenFile, selectedSession?.id]);
 
   const handleOpenLinkedFile = useCallback((filePath: string) => {
-    handleOpenFile(filePath, getFileName(filePath), selectedSession?.id ?? null);
-  }, [handleOpenFile, selectedSession?.id]);
+    handleOpenFile(filePath, getFileName(filePath), selectedSession?.id ?? null, selectedSession?.cwd ?? activeCwd);
+  }, [activeCwd, handleOpenFile, selectedSession?.cwd, selectedSession?.id]);
 
   const handleCloseFileTab = useCallback((tabId: string) => {
     setFileTabs((prev) => {
@@ -486,6 +543,10 @@ export function AppShell() {
         onSelectSession={handleSelectSession}
         onNewSession={() => handleNewSession(`palette-${Date.now()}`, activeCwd ?? "")}
         currentModel={null}
+        cwd={activeCwd}
+        onOpenFile={handleOpenPaletteFile}
+        onOpenChanges={() => setRightPanelOpen(true)}
+        onOpenModels={() => setModelsConfigOpen(true)}
       />
       <SessionSidebar
         selectedSessionId={selectedSession?.id ?? null}
@@ -498,7 +559,7 @@ export function AppShell() {
         onSessionDeleted={handleSessionDeleted}
         selectedCwd={selectedSession?.cwd ?? newSessionCwd ?? null}
         onCwdChange={handleCwdChange}
-        onOpenFile={handleOpenFile}
+        onOpenChange={handleOpenChange}
         explorerRefreshKey={explorerRefreshKey}
         onExplorerRefresh={handleExplorerRefresh}
         onAtMention={handleAtMention}
@@ -643,7 +704,7 @@ export function AppShell() {
         }
       }
     `}</style>
-    <div className="app-shell-root" style={{ display: "flex", height: "100dvh", overflow: "hidden", background: "var(--bg)" }}>
+    <div ref={shellRef} className="app-shell-root" style={{ display: "flex", height: "100dvh", overflow: "hidden", background: "var(--bg)" }}>
       {/* Mobile overlay backdrop */}
       <div
         className={`sidebar-overlay-backdrop${mobileSidebarReady ? "" : " sidebar-mobile-pending"}`}
@@ -669,10 +730,12 @@ export function AppShell() {
           flexDirection: "column",
           flexShrink: 0,
           zIndex: 200,
+          ...(isMobile ? {} : { width: sidebarOpen ? layout.sidebar : 0, minWidth: sidebarOpen ? layout.sidebar : 0 }),
         }}
       >
         {sidebarContent}
       </div>
+      {!isMobile && sidebarOpen && <div role="separator" aria-label={t("appShell.resizeSidebar")} aria-orientation="vertical" tabIndex={0} onPointerDown={() => beginResize("sidebar")} onKeyDown={(event) => resizeKeyDown("sidebar", event)} style={{ width: 6, cursor: "col-resize", flexShrink: 0, background: "var(--border)", opacity: 0.7 }} />}
 
       {/* Center: chat */}
       <main style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
@@ -1277,6 +1340,7 @@ export function AppShell() {
         </div>
       </main>
 
+      {!isMobile && rightPanelOpen && <div role="separator" aria-label={t("appShell.resizeFilePanel")} aria-orientation="vertical" tabIndex={0} onPointerDown={() => beginResize("file")} onKeyDown={(event) => resizeKeyDown("file", event)} style={{ width: 6, cursor: "col-resize", flexShrink: 0, background: "var(--border)", opacity: 0.7 }} />}
       {/* Right panel: file viewer — always mounted, width animated via CSS */}
       <div
         className={`right-panel-container${rightPanelOpen ? " right-panel-open" : " right-panel-closed"}`}
@@ -1285,6 +1349,7 @@ export function AppShell() {
           flexDirection: "column",
           borderLeft: "1px solid var(--border)",
           background: "var(--bg)",
+          ...(isMobile ? {} : { width: `calc(${layout.fileRatio * 100}% - 3px)`, minWidth: 280 }),
         }}
       >
         {/* Right panel tab bar */}
@@ -1305,7 +1370,9 @@ export function AppShell() {
           {activeFileTab?.filePath ? (
             <FileViewer
               filePath={activeFileTab.filePath}
-              cwd={activeCwd ?? undefined}
+              cwd={activeFileTab.cwd ?? undefined}
+              initialMode={activeFileTab.initialMode}
+              diffMode={activeFileTab.diffMode}
               sourceSessionId={activeFileTab.sourceSessionId}
               gitRefreshKey={explorerRefreshKey}
               onMentionLines={rightPanelOpen ? handleFileLineMention : undefined}
@@ -1313,6 +1380,7 @@ export function AppShell() {
                 filePath,
                 getFileName(filePath),
                 activeFileTab.sourceSessionId,
+                activeFileTab.cwd,
               )}
             />
           ) : (

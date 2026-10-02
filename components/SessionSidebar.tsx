@@ -1,13 +1,14 @@
 "use client";
 
 import { memo, useEffect, useLayoutEffect, useState, useCallback, useRef, useMemo, type CSSProperties, type ReactNode } from "react";
-import type { SessionInfo } from "@/lib/types";
+import type { GitDiffMode } from "@/lib/git-types";
 import { translate, useI18n } from "@/lib/i18n";
 import { formatApiError } from "@/lib/i18n/api-error";
 import { DirectoryPicker } from "./DirectoryPicker";
 import { FileExplorer, type FileExplorerHandle } from "./FileExplorer";
 import { Tooltip } from "./ui/primitives";
 import { Check, ChevronDown, ChevronRight, FolderOpen, GitBranch, Pencil, Plus, RefreshCw, Trash2, Upload } from "lucide-react";
+import type { SessionInfo } from "@/lib/types";
 
 declare global {
   interface Window {
@@ -29,6 +30,7 @@ interface Props {
   selectedCwd?: string | null;
   onCwdChange?: (cwd: string | null, projectRoot?: string | null) => void;
   onOpenFile?: (filePath: string, fileName: string) => void;
+  onOpenChange?: (filePath: string, cwd: string, diffMode: GitDiffMode) => void;
   explorerRefreshKey?: number;
   onExplorerRefresh?: () => void;
   onAtMention?: (relativePath: string, isDir: boolean) => void;
@@ -328,7 +330,7 @@ function OmpWebTitle() {
   );
 }
 
-export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, explorerRefreshKey, onExplorerRefresh, onAtMention, onAtMentions }: Props) {
+export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSession, initialSessionId, skipInitialProjectSelection, onInitialRestoreDone, refreshKey, onSessionDeleted, selectedCwd: selectedCwdProp, onCwdChange, onOpenFile, onOpenChange, explorerRefreshKey, onExplorerRefresh, onAtMention, onAtMentions }: Props) {
   const { t } = useI18n();
   const [allSessions, setAllSessions] = useState<SessionInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1494,6 +1496,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
                 ref={fileExplorerRef}
                 cwd={selectedCwd ?? selectedCwdProp!}
                 onOpenFile={onOpenFile ?? (() => {})}
+                onOpenChange={onOpenChange}
                 refreshKey={explorerKey}
                 onAtMention={onAtMention}
                 onAtMentions={onAtMentions}

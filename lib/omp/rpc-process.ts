@@ -220,10 +220,15 @@ export class RpcProcess {
     });
   }
 
-  /** Fire-and-forget frame write (extension_ui_response, host_tool_result). */
-  sendFrame(frame: { type: string; [key: string]: unknown }): void {
-    if (this.exited) return;
-    this.child.stdin.write(`${JSON.stringify(frame)}\n`);
+  /** Write an unsolicited protocol frame and report transport failure. */
+  sendFrame(frame: { type: string; [key: string]: unknown }): Promise<void> {
+    if (this.exited) return Promise.reject(new Error("omp RPC process has exited"));
+    return new Promise<void>((resolve, reject) => {
+      this.child.stdin.write(`${JSON.stringify(frame)}\n`, (error) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    });
   }
 
   private handleResponse(response: RpcResponseFrame): void {

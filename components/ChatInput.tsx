@@ -55,6 +55,8 @@ interface Props {
   thinkingLevelMap?: Record<string, string | null> | null;
   retryInfo?: { attempt: number; maxAttempts: number; errorMessage?: string } | null;
   queuedMessages?: QueuedMessages | null;
+  onRemoveQueuedMessage?: (message: string, queue: "steering" | "followUp") => Promise<void>;
+  onPromoteQueuedMessage?: (message: string) => Promise<void>;
   inputHistory?: string[];
   onRecallQueue?: () => void;
   slashCommands?: SlashCommandInfo[];
@@ -174,35 +176,22 @@ function revokeImagePreview(image: AttachedImage): void {
   }
 }
 
-function QueuedMessageRow({ kind, text }: { kind: "steer" | "follow-up"; text: string }) {
+function QueuedMessageRow({ kind, text, duplicate, onRemove, onPromote }: { kind: "steer" | "follow-up"; text: string; duplicate: boolean; onRemove?: () => Promise<void> | void; onPromote?: () => Promise<void> | void }) {
   const { t } = useI18n();
+  const [busy, setBusy] = useState(false);
+  const act = async (operation?: () => Promise<void> | void) => {
+    if (!operation || busy) return;
+    setBusy(true);
+    try { await operation(); } finally { setBusy(false); }
+  };
   return (
-    <div
-      title={text}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        padding: "3px 10px",
-        fontSize: 12,
-        color: "var(--text-muted)",
-        minWidth: 0,
-      }}
-    >
-      <span
-        style={{
-          flexShrink: 0,
-          fontSize: 10,
-          fontFamily: "var(--font-mono)",
-          padding: "1px 7px",
-          borderRadius: 999,
-          border: `1px solid ${kind === "steer" ? "color-mix(in srgb, var(--accent) 45%, transparent)" : "var(--border)"}`,
-          color: kind === "steer" ? "var(--accent)" : "var(--text-dim)",
-        }}
-      >
+    <div title={text} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 10px", fontSize: 12, color: "var(--text-muted)", minWidth: 0 }}>
+      <span style={{ flexShrink: 0, fontSize: 10, fontFamily: "var(--font-mono)", padding: "1px 7px", borderRadius: 999, border: `1px solid ${kind === "steer" ? "color-mix(in srgb, var(--accent) 45%, transparent)" : "var(--border)"}`, color: kind === "steer" ? "var(--accent)" : "var(--text-dim)" }}>
         {kind === "steer" ? t("chatInput.kindSteer") : t("chatInput.kindFollowUp")}
       </span>
-      <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{text}</span>
+      <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{text}</span>
+      <button type="button" disabled={busy || duplicate} title={duplicate ? "Duplicate queue text cannot be targeted safely" : "Remove queued message"} onClick={() => void act(onRemove)} style={{ border: 0, background: "transparent", color: "var(--text-dim)", cursor: busy || duplicate ? "not-allowed" : "pointer" }}>×</button>
+      {kind === "follow-up" && <button type="button" disabled={busy || duplicate} title={duplicate ? "Duplicate queue text cannot be targeted safely" : "Promote to steering"} onClick={() => void act(onPromote)} style={{ border: 0, background: "transparent", color: "var(--text-dim)", cursor: busy || duplicate ? "not-allowed" : "pointer" }}>↑</button>}
     </div>
   );
 }
@@ -257,7 +246,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
   onSend, onAbort, onSteer, onFollowUp, isStreaming, model, isAutoModelSelection, modelNames, modelList, modelError, modelsLoading, onModelChange,
   onCompact, onAbortCompaction, isCompacting, compactError, compactResult, toolPreset, onToolPresetChange,
   thinkingLevel, onThinkingLevelChange, availableThinkingLevels, thinkingLevelMap,
-  retryInfo, queuedMessages, inputHistory = [], onRecallQueue,
+  retryInfo, queuedMessages, onRemoveQueuedMessage, onPromoteQueuedMessage, inputHistory = [], onRecallQueue,
   slashCommands, slashCommandsLoading, onLoadSlashCommands,
   onBuiltinCommand,
   soundEnabled, onSoundToggle, onAudioUnlock,
@@ -1152,11 +1141,11 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput({
                 </button>
               )}
             </div>
-            {queuedMessages?.steering.map((text, i) => (
-              <QueuedMessageRow key={`steer-${i}`} kind="steer" text={text} />
+            {queuedMessages?.steering.map((text, i, all) => (
+              <QueuedMessageRow key={`steer-${i}`} kind="steer" text={text} duplicate={all.filter((item) => item === text).length > 1 || (queuedMessages.followUp.filter((item) => item === text).length > 0)} onRemove={() => onRemoveQueuedMessage?.(text, "steering")} />
             ))}
-            {queuedMessages?.followUp.map((text, i) => (
-              <QueuedMessageRow key={`followup-${i}`} kind="follow-up" text={text} />
+            {queuedMessages?.followUp.map((text, i, all) => (
+              <QueuedMessageRow key={`followup-${i}`} kind="follow-up" text={text} duplicate={all.filter((item) => item === text).length > 1 || (queuedMessages.steering.filter((item) => item === text).length > 0)} onRemove={() => onRemoveQueuedMessage?.(text, "followUp")} onPromote={() => onPromoteQueuedMessage?.(text)} />
             ))}
           </div>
         )}

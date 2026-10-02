@@ -54,6 +54,9 @@ export interface RpcSessionState {
   thinkingLevel: string | undefined;
   isStreaming: boolean;
   isCompacting: boolean;
+  isSettled: boolean;
+  hasPendingAsyncWork: boolean;
+  queuedMessages: { steering: string[]; followUp: string[] };
   steeringMode: "all" | "one-at-a-time";
   followUpMode: "all" | "one-at-a-time";
   interruptMode: "immediate" | "wait";
@@ -68,6 +71,13 @@ export interface RpcSessionState {
   contextUsage?: { tokens: number; contextWindow: number; percent: number };
 }
 
+export interface RpcPromptResultFrame {
+  type: "prompt_result";
+  status: "completed" | "aborted" | "error";
+  error?: { message: string; [key: string]: unknown };
+  sessionSettled: boolean;
+}
+
 /**
  * The state shape omp-web's own API returns to the browser
  * (AgentSessionWrapper adapts RpcSessionState and adds process-side flags).
@@ -80,6 +90,9 @@ export interface WebSessionState {
   isPromptRunning: boolean;
   isBashRunning: boolean;
   isCompacting: boolean;
+  isSettled: boolean;
+  hasPendingAsyncWork: boolean;
+  queuedMessages: { steering: string[]; followUp: string[] };
   autoCompactionEnabled: boolean;
   model?: ModelLike & { name?: string };
   messageCount: number;
@@ -91,6 +104,7 @@ export interface WebSessionState {
   extensionStatuses: Array<{ key: string; text: string }>;
   extensionWidgets: Array<{ key: string; lines: string[]; placement: "aboveEditor" | "belowEditor" }>;
 }
+
 
 export type AvailableSlashCommandSource =
   | "builtin"

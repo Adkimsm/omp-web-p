@@ -25,7 +25,7 @@ import { normalizeDisplayMath, useMarkdownPlugins } from "@/lib/markdown";
 import { CodeBlock, MermaidBlock } from "./MermaidBlock";
 import { Tooltip } from "./ui/primitives";
 import { parseUnifiedPatch } from "@/lib/patch";
-import type { GitFileDiffResponse } from "@/lib/git-types";
+import type { GitDiffMode, GitFileDiffResponse } from "@/lib/git-types";
 
 interface Props {
   filePath: string;
@@ -34,6 +34,8 @@ interface Props {
   onOpenFile?: (filePath: string) => void;
   onMentionLines?: (relativePath: string, startLine: number, endLine: number) => void;
   gitRefreshKey?: number;
+  initialMode?: "source" | "diff";
+  diffMode?: GitDiffMode;
 }
 
 interface FileData {
@@ -777,7 +779,7 @@ function DocumentViewer({ filePath, cwd, sourceSessionId }: Props) {
   );
 }
 
-export function FileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onMentionLines, gitRefreshKey }: Props) {
+export function FileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onMentionLines, gitRefreshKey, initialMode, diffMode }: Props) {
   if (isImagePath(filePath)) {
     return <ImageViewer filePath={filePath} cwd={cwd} sourceSessionId={sourceSessionId} />;
   }
@@ -787,17 +789,17 @@ export function FileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onMenti
   if (isDocumentPreviewPath(filePath)) {
     return <DocumentViewer filePath={filePath} cwd={cwd} sourceSessionId={sourceSessionId} />;
   }
-  return <TextFileViewer filePath={filePath} cwd={cwd} sourceSessionId={sourceSessionId} onOpenFile={onOpenFile} onMentionLines={onMentionLines} gitRefreshKey={gitRefreshKey} />;
+  return <TextFileViewer filePath={filePath} cwd={cwd} sourceSessionId={sourceSessionId} onOpenFile={onOpenFile} onMentionLines={onMentionLines} gitRefreshKey={gitRefreshKey} initialMode={initialMode} diffMode={diffMode} />;
 }
 
-function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onMentionLines, gitRefreshKey }: Props) {
+function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onMentionLines, gitRefreshKey, initialMode, diffMode = "combined" }: Props) {
   const { t } = useI18n();
   const { isDark } = useTheme();
   const [data, setData] = useState<FileData | null>(null);
   const [gitDiff, setGitDiff] = useState<GitFileDiffResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [displayMode, setDisplayMode] = useState<DisplayMode>("source");
+  const [displayMode, setDisplayMode] = useState<DisplayMode>(initialMode === "diff" ? "diff" : "source");
   const [wrapLines, setWrapLines] = useState(false);
   const [watching, setWatching] = useState(false);
   const esRef = useRef<EventSource | null>(null);
@@ -831,7 +833,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onMentionL
     }
 
     try {
-      const params = new URLSearchParams({ cwd, path: targetPath });
+      const params = new URLSearchParams({ cwd, path: targetPath, mode: diffMode });
       const response = await fetch(`/api/git/diff?${params.toString()}`);
       const next = await response.json() as GitFileDiffResponse & { error?: string };
       if (requestId !== gitDiffRequestRef.current) return;
@@ -847,7 +849,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onMentionL
     setError(null);
     setData(null);
     setGitDiff(null);
-    setDisplayMode("source");
+    setDisplayMode(initialMode === "diff" ? "diff" : "source");
     setWrapLines(false);
     setWatching(false);
 
@@ -885,7 +887,7 @@ function TextFileViewer({ filePath, cwd, sourceSessionId, onOpenFile, onMentionL
       es.close();
       esRef.current = null;
     };
-  }, [filePath, fetchContent, fetchGitDiff, sourceSessionId]);
+  }, [filePath, fetchContent, fetchGitDiff, sourceSessionId, initialMode, diffMode]);
 
   useEffect(() => {
     void fetchGitDiff(filePath);

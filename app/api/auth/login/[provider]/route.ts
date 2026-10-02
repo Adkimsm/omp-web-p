@@ -96,6 +96,11 @@ export async function GET(
       let bufferedValue: string | null = null;
 
       let proc: RpcProcess | null = null;
+      const writeResponse = (id: string, value: string) => {
+        void proc?.sendFrame({ type: "extension_ui_response", id, value }).catch((error) => {
+          send({ type: "error", message: error instanceof Error ? error.message : String(error) });
+        });
+      };
       const handleFrame = (frame: RpcFrame) => {
         if (frame.type !== "extension_ui_request") return;
         const method = frame.method;
@@ -111,7 +116,7 @@ export async function GET(
           if (bufferedValue !== null) {
             const value = bufferedValue;
             bufferedValue = null;
-            proc?.sendFrame({ type: "extension_ui_response", id, value });
+            writeResponse(id, value);
           } else {
             pendingInputId = id;
             send({
@@ -145,7 +150,7 @@ export async function GET(
           if (pendingInputId !== null) {
             const id = pendingInputId;
             pendingInputId = null;
-            child.sendFrame({ type: "extension_ui_response", id, value });
+            writeResponse(id, value);
           } else {
             bufferedValue = value;
           }

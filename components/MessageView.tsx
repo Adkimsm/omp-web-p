@@ -275,21 +275,16 @@ function UserMessageView({ message, cwd, onOpenFile, entryId, onFork, forking, o
               {canNavigate && (
                 <Tooltip content={t("messageView.editFromHereTitle")}>
                   <button
-                    onClick={() => { onNavigate!(prevAssistantEntryId!); onEditContent?.(content); }}
+                    onClick={() => onNavigate!(prevAssistantEntryId!)}
                     aria-label={t("messageView.editFromHereTitle")}
                     style={{
                       display: "flex", alignItems: "center", gap: 4,
                       padding: "3px 8px", height: 22,
                       background: "none", border: "none",
                       borderRadius: 5,
-                      color: "var(--text-dim)",
-                      cursor: "pointer",
-                      fontSize: 11, fontWeight: 400,
-                      whiteSpace: "nowrap",
-                      transition: "color 0.12s",
+                      color: "var(--text-dim)", cursor: "pointer",
+                      fontSize: 11, fontWeight: 400, whiteSpace: "nowrap",
                     }}
-                    onMouseEnter={(e) => { e.currentTarget.style.color = "var(--accent)"; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-dim)"; }}
                   >
                     <CornerUpLeft size={11} strokeWidth={1.8} />
                     {t("messageView.editFromHere")}

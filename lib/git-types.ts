@@ -20,8 +20,13 @@ export interface GitStatusResponse {
   files: GitFileStatus[];
 }
 
+export type GitDiffMode = "combined" | "staged" | "unstaged";
+
+export type GitDiffKind = "text" | "metadata" | "binary" | "too_large" | "none";
+
 export interface GitFileDiffResponse {
   supported: boolean;
+  kind: GitDiffKind;
   status?: GitFileStatusKind;
   patch?: string;
 }

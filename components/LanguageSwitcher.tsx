@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { LOCALES, useI18n } from "@/lib/i18n";
 
 /** Language toggle for the top bar. Renders the current language and opens a
@@ -17,6 +18,8 @@ export function LanguageSwitcher() {
   const [activeIndex, setActiveIndex] = useState(0);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const menuRef = useRef<HTMLUListElement | null>(null);
+  const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 });
   const baseId = useId();
   const listboxId = `${baseId}-listbox`;
 
@@ -32,6 +35,26 @@ export function LanguageSwitcher() {
   useEffect(() => {
     if (open) itemRefs.current[activeIndex]?.focus();
   }, [open, activeIndex]);
+
+  useEffect(() => {
+    if (!open) return;
+    const updatePosition = () => {
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (rect) setMenuPosition({ top: rect.bottom + 4, left: Math.max(8, Math.min(rect.right - 120, window.innerWidth - 128)) });
+    };
+    const onOutsidePointer = (event: PointerEvent) => {
+      if (event.target instanceof Node && !triggerRef.current?.contains(event.target) && !menuRef.current?.contains(event.target)) setOpen(false);
+    };
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    document.addEventListener("scroll", updatePosition, true);
+    document.addEventListener("pointerdown", onOutsidePointer);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      document.removeEventListener("scroll", updatePosition, true);
+      document.removeEventListener("pointerdown", onOutsidePointer);
+    };
+  }, [open]);
 
   // Close on outside click / Escape is handled in onKeyDown below; also close
   // when the trigger loses focus to something outside the component.
@@ -91,7 +114,7 @@ export function LanguageSwitcher() {
       style={{ position: "relative", flexShrink: 0 }}
       onBlur={(e) => {
         // Close when focus leaves the whole switcher.
-        if (!e.currentTarget.contains(e.relatedTarget as Node)) setOpen(false);
+        if (!e.currentTarget.contains(e.relatedTarget as Node) && !menuRef.current?.contains(e.relatedTarget as Node)) setOpen(false);
       }}
     >
       <button
@@ -116,16 +139,20 @@ export function LanguageSwitcher() {
         {current.label}
       </button>
 
-      {open && (
+      {open && createPortal(
         <ul
+          ref={menuRef}
+          onBlur={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node) && !triggerRef.current?.contains(event.relatedTarget as Node)) setOpen(false);
+          }}
           id={listboxId}
           role="menu"
           className="animate-slide-down"
           style={{
-            position: "absolute",
-            top: "calc(100% + 4px)",
-            right: 0,
-            zIndex: 50,
+            position: "fixed",
+            top: menuPosition.top,
+            left: menuPosition.left,
+            zIndex: 350,
             minWidth: 120,
             margin: 0,
             padding: 4,
@@ -177,7 +204,8 @@ export function LanguageSwitcher() {
               </li>
             );
           })}
-        </ul>
+        </ul>,
+        document.body,
       )}
     </div>
   );

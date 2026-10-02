@@ -219,8 +219,12 @@ export class AgentSessionWrapper {
   }
 
   isRunning(): boolean {
-    return this.isAlive() && (this.promptRunning || this.streaming || this.compacting || this.bashRunning);
+    return this.isAlive() && (this.promptRunning || this.streaming || this.compacting || this.bashRunning || this.hasPendingAsyncWork || !this.isSettled || this.queuedMessages.steering.length > 0 || this.queuedMessages.followUp.length > 0);
   }
+
+  private isSettled = true;
+  private hasPendingAsyncWork = false;
+  private queuedMessages: { steering: string[]; followUp: string[] } = { steering: [], followUp: [] };
 
   start(): void {
     this.unsubscribeFrames = this.proc.onFrame((frame) => this.handleFrame(frame));
@@ -237,6 +241,9 @@ export class AgentSessionWrapper {
   private async initialize(): Promise<void> {
     await this.proc.waitReady(READY_TIMEOUT_MS);
     const state = await this.proc.sendCommand<RpcSessionState>({ type: "get_state" });
+    if (typeof state.isSettled !== "boolean" || typeof state.hasPendingAsyncWork !== "boolean" || !state.queuedMessages || !Array.isArray(state.queuedMessages.steering) || !Array.isArray(state.queuedMessages.followUp)) {
+      throw new WebRpcError("This omp binary does not support the required RPC session protocol. Upgrade omp to continue.", "omp_protocol_unsupported");
+    }
     this.applyIdentity(state);
   }
 
@@ -246,6 +253,9 @@ export class AgentSessionWrapper {
     this._sessionName = state.sessionName;
     this.streaming = state.isStreaming;
     this.compacting = state.isCompacting;
+    this.isSettled = state.isSettled;
+    this.hasPendingAsyncWork = state.hasPendingAsyncWork;
+    this.queuedMessages = state.queuedMessages;
     if (this._sessionFile) cacheSessionPath(this._sessionId, this._sessionFile);
   }
 
@@ -275,13 +285,26 @@ export class AgentSessionWrapper {
       case "agent_end":
         if (event.isTerminal !== false) {
           this.streaming = false;
-          this.promptRunning = false;
           invalidateSessionListCache();
         }
         break;
-      case "prompt_result":
-        // Local-only prompt (builtin/extension slash command) — no agent run.
+      case "session_settled":
+        this.isSettled = true;
+        this.hasPendingAsyncWork = false;
         this.promptRunning = false;
+        break;
+      case "queue_update":
+        if (event.queuedMessages && typeof event.queuedMessages === "object") {
+          const queues = event.queuedMessages as { steering?: unknown; followUp?: unknown };
+          if (Array.isArray(queues.steering) && Array.isArray(queues.followUp)) this.queuedMessages = { steering: queues.steering.filter((v): v is string => typeof v === "string"), followUp: queues.followUp.filter((v): v is string => typeof v === "string") };
+        }
+        break;
+      case "prompt_result":
+        if (event.status === "error") this.emit({ type: "prompt_error", errorMessage: (event.error as { message?: string } | undefined)?.message ?? "Prompt failed" });
+        if (event.sessionSettled === true) {
+          this.isSettled = true;
+          this.promptRunning = false;
+        }
         break;
       case "auto_compaction_start":
         this.compacting = true;
@@ -429,6 +452,9 @@ export class AgentSessionWrapper {
     // Reconcile process-side flags with authoritative child state.
     this.streaming = state.isStreaming;
     this.compacting = state.isCompacting;
+    this.isSettled = state.isSettled;
+    this.hasPendingAsyncWork = state.hasPendingAsyncWork;
+    this.queuedMessages = state.queuedMessages;
     this._sessionName = state.sessionName;
     if (state.sessionId) {
       this._sessionId = state.sessionId;
@@ -442,6 +468,9 @@ export class AgentSessionWrapper {
       isPromptRunning: this.promptRunning,
       isBashRunning: this.bashRunning,
       isCompacting: state.isCompacting,
+      isSettled: state.isSettled,
+      hasPendingAsyncWork: state.hasPendingAsyncWork,
+      queuedMessages: state.queuedMessages,
       autoCompactionEnabled: state.autoCompactionEnabled,
       model: state.model ? { id: state.model.id, provider: state.model.provider, name: state.model.name } : undefined,
       messageCount: state.messageCount,
@@ -546,21 +575,13 @@ export class AgentSessionWrapper {
           notifyRunningChange();
         }
         try {
-          // omp acks immediately; agent output streams as events, completion is
-          // agent_end (agent runs) or prompt_result (local-only slash commands).
-          const ack = await this.proc.sendCommand<{ agentInvoked?: boolean } | undefined>({
+          // The immediate response only acknowledges transport; completion arrives as protocol events.
+          await this.proc.sendCommand({
             type: "prompt",
             message: command.message as string,
             ...(toImageContents(command.images) ? { images: toImageContents(command.images) } : {}),
             ...(streamingBehavior ? { streamingBehavior } : {}),
           });
-          // Slash commands fully consumed by a builtin report agentInvoked:false
-          // in the ack itself — no prompt_result frame follows.
-          if (ack?.agentInvoked === false && !streamingBehavior) {
-            this.promptRunning = false;
-            this.emit({ type: "prompt_result", agentInvoked: false });
-            notifyRunningChange();
-          }
         } catch (error) {
           this.promptRunning = false;
           notifyRunningChange();
@@ -600,6 +621,19 @@ export class AgentSessionWrapper {
         invalidateModelsCache();
         invalidateSessionListCache();
         return { id: model.id, provider: model.provider };
+      }
+      case "remove_queued_message":
+      case "promote_queued_message": {
+        const payload = type === "remove_queued_message"
+          ? { type, message: command.message as string, queue: command.queue as "steering" | "followUp" }
+          : { type, message: command.message as string };
+        const result = await this.proc.sendCommand(payload);
+        const state = await this.proc.sendCommand<RpcSessionState>({ type: "get_state" });
+        this.isSettled = state.isSettled;
+        this.hasPendingAsyncWork = state.hasPendingAsyncWork;
+        this.queuedMessages = state.queuedMessages;
+        notifyRunningChange();
+        return result ?? null;
       }
 
       case "fork": {
@@ -688,8 +722,15 @@ export class AgentSessionWrapper {
 
       case "extension_ui_response": {
         const { id, ...rest } = command as { id: string; [key: string]: unknown };
+        const pending = this.pendingUiRequests.get(id);
+        if (!pending) throw new WebRpcError("This extension request has expired or was already answered.", "extension_request_expired");
+        const expiresAt = pending.expiresAt as number | undefined;
+        if (expiresAt !== undefined && expiresAt <= Date.now()) {
+          this.forgetPendingUiRequest(id);
+          throw new WebRpcError("This extension request has expired.", "extension_request_expired");
+        }
+        await this.proc.sendFrame({ type: "extension_ui_response", id, ...rest });
         this.forgetPendingUiRequest(id);
-        this.proc.sendFrame({ type: "extension_ui_response", id, ...rest });
         return null;
       }
 
