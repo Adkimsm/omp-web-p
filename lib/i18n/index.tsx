@@ -72,7 +72,10 @@ export function setLocale(locale: Locale): void {
 
 /** Translate outside React (toasts, error helpers). Falls back key → en → key. */
 export function translate(key: string, vars?: Record<string, string | number>): string {
-  const locale = getLocale();
+  return translateForLocale(getLocale(), key, vars);
+}
+
+function translateForLocale(locale: Locale, key: string, vars?: Record<string, string | number>): string {
   const template = dictionaries[locale][key] ?? dictionaries.en[key] ?? key;
   if (!vars) return template;
   return template.replace(/\{(\w+)\}/g, (match, name: string) =>
@@ -108,17 +111,13 @@ export function useI18n() {
   const locale = useSyncExternalStore(subscribe, getLocale, getServerSnapshot);
 
   const t = useCallback(
-    (key: string, vars?: Record<string, string | number>) => translate(key, vars),
-    // translate() reads module state that only changes with `locale`; depending
-    // on it keeps memoized consumers re-translating on switch.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    (key: string, vars?: Record<string, string | number>) => translateForLocale(locale, key, vars),
     [locale],
   );
 
   const tn = useCallback(
     (key: string, count: number, vars?: Record<string, string | number>) =>
-      translatePlural(key, count, vars),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+      translateForLocale(locale, `${key}.${count === 1 ? "one" : "other"}`, { count, ...vars }),
     [locale],
   );
 
