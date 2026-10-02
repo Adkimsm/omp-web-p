@@ -955,7 +955,11 @@ export function useAgentSession(opts: UseAgentSessionOptions) {
         if (state.extensionStatuses !== undefined) setExtensionStatuses(state.extensionStatuses ?? []);
         if (state.extensionWidgets !== undefined) setExtensionWidgets(state.extensionWidgets ?? []);
       }
-      await finishPromptWithoutStream(sid, runId);
+      // State reconciliation is authoritative for completion, but an active
+      // omp turn must not be finalized just because its SSE stream was quiet.
+      // The previous code computed `busy` and then ignored it, which made a
+      // long-running turn appear interrupted after every reconcile tick.
+      if (!busy) await finishPromptWithoutStream(sid, runId);
     } catch {
       // Network still down — the next poll / visibility / online tick retries.
     }

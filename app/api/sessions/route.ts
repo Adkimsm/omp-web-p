@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createHash } from "crypto";
-import { listAllSessions } from "@/lib/session-reader";
+import { listAllSessions, invalidateSessionListCache } from "@/lib/session-reader";
 import { getRunningRpcSessionIds } from "@/lib/rpc-manager";
 
 // The session list mixes on-disk sessions with the live runningSessionIds set,
@@ -15,6 +15,10 @@ const SESSION_LIST_HEADERS = {
 
 export async function GET(req: Request) {
   try {
+    // A user-triggered refresh must observe files created after the last
+    // 30-second list scan. Keep the TTL for ordinary reads, but invalidate it
+    // for explicit cache-busting requests from the sidebar.
+    if (new URL(req.url).searchParams.has("refresh")) invalidateSessionListCache();
     const sessions = await listAllSessions();
     const runningSessionIds = getRunningRpcSessionIds();
     const body = { sessions, runningSessionIds };

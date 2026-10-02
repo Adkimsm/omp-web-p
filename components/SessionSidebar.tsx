@@ -373,7 +373,7 @@ export function SessionSidebar({ selectedSessionId, onSelectSession, onNewSessio
   const loadSessions = useCallback(async (showLoading = false) => {
     try {
       if (showLoading) setLoading(true);
-      const res = await fetch("/api/sessions");
+      const res = await fetch(`/api/sessions?refresh=${Date.now()}`, { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json() as { sessions: SessionInfo[]; runningSessionIds?: string[] };
       setAllSessions(data.sessions);
